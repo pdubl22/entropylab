@@ -42,6 +42,10 @@ sudo -u $USER_NAME defaults write com.apple.icloud iCloudDriveEnabled -bool fals
 sudo -u $USER_NAME defaults write com.apple.ApplePay SetupCompleted -bool true
 sudo -u $USER_NAME defaults write com.apple.screentime SetupCompleted -bool true
 
+# --- System-Wide Silence ---
+# Disable automatic software update checks to reduce telemetry and popups
+sudo softwareupdate --schedule off
+
 # --- UI & Privacy Hardening ---
 sudo -u $USER_NAME defaults write com.apple.Spotlight ShowAllSuggestions -bool false
 sudo -u $USER_NAME defaults write com.apple.dock show-recents -bool false
