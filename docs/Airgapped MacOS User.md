@@ -1,86 +1,116 @@
-# 🛡️ Hardened macOS Kiosk User Guide
+# Airgapped macOS user for EntropyLab
 
-**Secure, Low-Persistence Runtime Environment for Apple Silicon**
+Dedicated **standard** user on Apple Silicon. Chromium/Chrome profile lives on a RAM disk. The app is the self-contained [`entropylab.html`](https://github.com/OogaBoogaX/entropylab/blob/rock/entropylab.html) file (logos/JS/WASM already inlined). Opened as `file://` — no local web server.
 
-This guide outlines the process for creating a dedicated, hardened macOS user account designed for the **EntropyLab** application. The focus is on **minimizing the software attack surface** and **preventing data persistence** by forcing the browser to operate out of a volatile RAM directory.
+This is a **smaller** attack surface than a normal Mac login. It is **not** as small as the Alpine Pi image. macOS still has a huge TCB. Use a machine that stays offline after setup.
 
-## 🎯 Project Goal
+The browser is **fullscreen, not kiosk**, so Save As to USB works.
 
-To create a "disposable" user session where:
-1. **No Onboarding:** The user is dropped directly into the environment without iCloud/Siri prompts.
-2. **Zero Browser Persistence:** Chromium data is stored in a true RAM disk and wiped upon reboot.
-3. **Reduced Footprint:** System features (Spotlight, Dock recents, Desktop icons) are disabled.
-4. **Privilege Limitation:** The user is a "Standard User," preventing system-wide modifications.
-5. **Easy Exit:** A "Self-Destruct" button on the Dock allows the user to wipe the environment, reset system power settings instantly, and forcefully reboot.
+> [!CAUTION]
+> Run every command from an **admin** account that already has a Secure Token (the account you created the Mac with).
+>
+> Install **Chromium or Google Chrome** from a verified .dmg **before** you pull the network. This guide does not download a browser.
+>
+> `pmset` and the RAM-disk LaunchDaemon are **machine-wide**. Use Self-Destruct (or the manual cleanup) when you want the Mac back to normal sleep.
+
+## Goal
+
+1. Standard user, no iCloud/Siri first-run circus.
+2. Browser profile on a RAM disk, gone at reboot.
+3. `file://` EntropyLab HTML, no listening HTTP port.
+4. USB save works (native file picker).
+5. One Dock item runs a root-owned cleanup script via a **narrow** sudoers rule.
 
 ---
 
-## 🛠️ Deployment Workflow
-
-**Execute all following steps from an Administrator account.**
-
-### 1. User Creation
-We use `sysadminctl` to ensure the user is created with the correct Secure Token for Apple Silicon hardware.
+## 1. Copy the app and create the user
 
 ```zsh
-# Replace 'UserPassword123' with your desired password
-sudo sysadminctl -addUser entropylab -fullName "EntropyLab" -password "UserPassword123"
+# Self-contained artifact. Prefer a release + SHA256SUMS.txt for real funds.
+curl -fL -o /tmp/entropylab.html \
+  https://raw.githubusercontent.com/OogaBoogaX/entropylab/rock/entropylab.html
+
+# Prompt for the kiosk password instead of baking one into history.
+echo "Password for the new standard user 'entropylab':"
+read -s EL_PASS
+echo
+
+sudo sysadminctl -addUser entropylab \
+  -fullName "EntropyLab" \
+  -password "$EL_PASS" \
+  -home /Users/entropylab \
+  -shell /bin/zsh
+
+unset EL_PASS
+
+sudo mkdir -p /Users/entropylab/bin /Users/entropylab/Library/LaunchAgents
+sudo cp /tmp/entropylab.html /Users/entropylab/entropylab.html
+sudo chown -R entropylab:staff /Users/entropylab
+sudo chmod 644 /Users/entropylab/entropylab.html
+# Optional: lock the HTML so the standard user cannot overwrite it
+sudo chflags uchg /Users/entropylab/entropylab.html
 ```
 
-### 2. System Silence & Hardening
-These commands trick macOS into thinking the "Welcome" process is complete and disable features that could lead to data leaks or distractions.
+`sysadminctl -addUser` (run by a Secure Token admin, with `-password`) is the supported way to bootstrap a token for the new user on Apple Silicon. Do not use `dscl` for this.
+
+## 2. Skip first-run and quiet the UI
+
+Do **not** hide `/Volumes` from the file picker. `CreateDesktop` only hides desktop *icons*; Chrome’s Save As still sees USB disks under `/Volumes`.
 
 ```zsh
-USER_NAME="entropylab"
+U=entropylab
 
-echo "Applying hardening flags for $USER_NAME..."
+sudo -u "$U" defaults write com.apple.SetupAssistant DidSeeCloudSetup -bool true
+sudo -u "$U" defaults write com.apple.SetupAssistant SkipCloudSetup -bool true
+sudo -u "$U" defaults write com.apple.SetupAssistant DidSeeSiriSetup -bool true
+sudo -u "$U" defaults write com.apple.SetupAssistant DidSeePrivacy -bool true
+sudo -u "$U" defaults write com.apple.SetupAssistant DidSeeAppearanceSetup -bool true
+sudo -u "$U" defaults write com.apple.SetupAssistant DidSeeScreenTime -bool true
+sudo -u "$U" defaults write com.apple.SetupAssistant DidSeeAccessibility -bool true
 
-# --- Skip Onboarding & Popups ---
-sudo -u $USER_NAME defaults write com.apple.setupassistant SetupDone -bool true
-sudo -u $USER_NAME defaults write com.apple.Siri SiriEnabled -bool false
-sudo -u $USER_NAME defaults write com.apple.icloud iCloudDriveEnabled -bool false
-sudo -u $USER_NAME defaults write com.apple.ApplePay SetupCompleted -bool true
-sudo -u $USER_NAME defaults write com.apple.screentime SetupCompleted -bool true
+sudo -u "$U" defaults write com.apple.Siri StatusMenuVisible -bool false
+sudo -u "$U" defaults write com.apple.Siri SiriEnabled -bool false
+sudo -u "$U" defaults write com.apple.dock show-recents -bool false
+sudo -u "$U" defaults write com.apple.finder CreateDesktop -bool false
 
-# --- System-Wide Silence ---
-# Disable automatic software update checks to reduce telemetry and popups
-sudo softwareupdate --schedule off
-
-# --- UI & Privacy Hardening ---
-sudo -u $USER_NAME defaults write com.apple.Spotlight ShowAllSuggestions -bool false
-sudo -u $USER_NAME defaults write com.apple.dock show-recents -bool false
-sudo -u $USER_NAME defaults write com.apple.finder DisableGetInfo -bool true
-sudo -u $USER_NAME defaults write com.apple.finder CreateDesktop -bool false
-sudo -u $USER_NAME defaults write com.apple.finder ShowExternalVolumesOnDesktop -bool false
-sudo -u $USER_NAME defaults write com.apple.finder ShowHardDisksOnDesktop -bool false
-
-# --- Power Management ---
-# Disable sleep, screen saver, and hibernation to prevent interruptions 
-# and prevent RAM contents from being written to the NVMe sleepimage.
+# Sleep image would write RAM to NVMe. Machine-wide; Self-Destruct restores this.
 sudo pmset -a sleep 0 disablesleep 1 hibernatemode 0
-sudo -u $USER_NAME defaults write com.apple.screensaver idleTime -int 0
-
-echo "✅ System flags applied."
+sudo -u "$U" defaults write com.apple.screensaver idleTime -int 0
 ```
 
-### 3. The RAM Disk Engine (System Level)
-Because only the root user can create a RAM disk, we create a **LaunchDaemon**. This ensures the RAM disk is ready and waiting before the user even logs in.
+Leave Wi-Fi/Bluetooth off from the menu bar (or `networksetup -setairportpower en0 off`) **on the machine**, not only in this user. This guide does not toggle radios automatically so we cannot brick a Mac that still needs admin network.
+
+## 3. RAM disk (LaunchDaemon, root, idempotent)
+
+256 MB is too small for a Chrome profile. Default is **1 GiB**. `ram://` units are 512-byte sectors (`MB * 2048`).
 
 ```zsh
-# Create the script that creates the RAM disk
 sudo tee /usr/local/bin/create_ramdisk.sh << 'EOF'
 #!/bin/zsh
-# Create a 256MB RAM Disk
-RAM_DISK_SIZE=524288 
-RAM_DEV=$(hdiutil attach -nomount ram://$RAM_DISK_SIZE)
-diskutil erasevolume HFS+ "RAMDISK" $RAM_DEV
-mkdir -p /Volumes/RAMDISK/chrome
-chmod 777 /Volumes/RAMDISK/chrome
+set -euo pipefail
+
+OWNER=entropylab
+VOL=/Volumes/RAMDISK
+SECTORS=$((1024 * 2048))  # 1 GiB
+
+if [ -d "$VOL/chrome" ]; then
+  chown -R "$OWNER":staff "$VOL"
+  chmod 700 "$VOL/chrome"
+  exit 0
+fi
+
+DEV=$(hdiutil attach -nomount "ram://${SECTORS}" | tr -d '[:space:]')
+if ! diskutil erasevolume APFS RAMDISK "$DEV"; then
+  diskutil erasevolume HFS+ RAMDISK "$DEV"
+fi
+
+mkdir -p "$VOL/chrome"
+chown -R "$OWNER":staff "$VOL"
+chmod 700 "$VOL/chrome"
 EOF
+sudo chmod 755 /usr/local/bin/create_ramdisk.sh
+sudo chown root:wheel /usr/local/bin/create_ramdisk.sh
 
-sudo chmod +x /usr/local/bin/create_ramdisk.sh
-
-# Create the LaunchDaemon to run this at boot
 sudo tee /Library/LaunchDaemons/com.entropylab.ramdisk.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -94,49 +124,81 @@ sudo tee /Library/LaunchDaemons/com.entropylab.ramdisk.plist << 'EOF'
     </array>
     <key>RunAtLoad</key>
     <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/entropylab-ramdisk.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/entropylab-ramdisk.log</string>
 </dict>
 </plist>
 EOF
-
 sudo chown root:wheel /Library/LaunchDaemons/com.entropylab.ramdisk.plist
+sudo chmod 644 /Library/LaunchDaemons/com.entropylab.ramdisk.plist
+
+sudo launchctl bootout system/com.entropylab.ramdisk 2>/dev/null || true
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.entropylab.ramdisk.plist
+sudo launchctl enable system/com.entropylab.ramdisk
+sudo launchctl kickstart -k system/com.entropylab.ramdisk
 ```
 
-### 4. The Hardened Browser Wrapper (User Level)
-This script launches the browser and forces it to use the RAM disk for all profile data.
+Confirm `/Volumes/RAMDISK/chrome` exists and is owned by `entropylab` before continuing.
+
+## 4. Browser wrapper (wait for RAM disk, fullscreen, file://)
+
+Prefers Chromium if installed, else Google Chrome. No kiosk flag. No `--disable-software-rasterizer` (hurts Mac GPU). No local HTTP server.
 
 ```zsh
-# Create a local bin directory for the user
-sudo mkdir -p /Users/entropylab/bin
-sudo chown entropylab:staff /Users/entropylab/bin
-
-# Create the launch script
 sudo tee /Users/entropylab/bin/launch_browser.sh << 'EOF'
 #!/bin/zsh
-open -a "Google Chrome" --args \
-    --incognito \
-    --no-first-run \
-    --disable-sync \
-    --disable-extensions \
-    --disable-component-update \
-    --disable-notifications \
-    --disable-software-rasterizer \
-    --disable-dev-shm-usage \
-    --user-data-dir=/Volumes/RAMDISK/chrome \
-    "http://127.0.0.1:8080/entropylab.html"
+set -euo pipefail
+
+for i in {1..30}; do
+  [ -d /Volumes/RAMDISK/chrome ] && break
+  sleep 1
+done
+if [ ! -d /Volumes/RAMDISK/chrome ]; then
+  osascript -e 'display notification "RAM disk missing" with title "EntropyLab"'
+  exit 1
+fi
+
+APP="/Applications/Chromium.app"
+if [ ! -d "$APP" ]; then
+  APP="/Applications/Google Chrome.app"
+fi
+if [ ! -d "$APP" ]; then
+  osascript -e 'display notification "Install Chromium or Google Chrome first" with title "EntropyLab"'
+  exit 1
+fi
+
+HTML="/Users/entropylab/entropylab.html"
+
+open -a "$APP" --args \
+  --incognito \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-sync \
+  --disable-extensions \
+  --disable-component-update \
+  --disable-notifications \
+  --disable-infobars \
+  --noerrdialogs \
+  --disable-session-crashed-bubble \
+  --disable-features=TranslateUI \
+  --password-store=basic \
+  --use-mock-keychain \
+  --start-fullscreen \
+  --user-data-dir=/Volumes/RAMDISK/chrome \
+  "file://${HTML}"
 EOF
 
-sudo chmod +x /Users/entropylab/bin/launch_browser.sh
 sudo chown -R entropylab:staff /Users/entropylab/bin
+sudo chmod 755 /Users/entropylab/bin/launch_browser.sh
 ```
 
-### 5. Automation: Launch on Login
-This creates a `launchd` agent that triggers the browser script immediately upon login.
+## 5. Launch agent (runs at login)
+
+Do not `bootstrap gui/` here — that user is not logged in yet. The plist in `~/Library/LaunchAgents` loads on next login.
 
 ```zsh
-# Create the LaunchAgents directory first to avoid missing directory errors
-sudo mkdir -p /Users/entropylab/Library/LaunchAgents
-sudo chown -R entropylab:staff /Users/entropylab/Library
-
 sudo tee /Users/entropylab/Library/LaunchAgents/com.entropylab.browser.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -153,78 +215,93 @@ sudo tee /Users/entropylab/Library/LaunchAgents/com.entropylab.browser.plist << 
 </dict>
 </plist>
 EOF
-
-sudo chown entropylab:staff /Users/entropylab/Library/LaunchAgents/com.entropylab.browser.plist
+sudo chown -R entropylab:staff /Users/entropylab/Library
+sudo chmod 644 /Users/entropylab/Library/LaunchAgents/com.entropylab.browser.plist
 ```
 
-### 6. The "Self-Destruct" Mechanism
-To allow the restricted user to wipe the environment and reset the system without needing an admin password, we implement a privileged cleanup script and pin it to the Dock.
+## 6. Self-Destruct (narrow sudoers)
+
+The `.command` file is the only thing `entropylab` may run as root. The script is root-owned and not writable by that user. The script **itself** runs as root, so it must **not** call `sudo` again (the kiosk user has no general sudo).
 
 ```zsh
-# 1. Create the root-level cleanup script
 sudo tee /usr/local/bin/cleanup_entropylab.sh << 'EOF'
 #!/bin/zsh
-echo "🧹 Self-Destruct Initiated..."
+set -eu
 
-# Reset System Power Settings (Return to 10m sleep)
-sudo pmset -a sleep 10 disablesleep 0 hibernatemode 3
+pmset -a sleep 10 disablesleep 0 hibernatemode 3
 
-# Remove the System-Level RAM Disk Engine
-sudo rm -f /Library/LaunchDaemons/com.entropylab.ramdisk.plist
-sudo rm -f /usr/local/bin/create_ramdisk.sh
+launchctl bootout system/com.entropylab.ramdisk 2>/dev/null || true
+rm -f /Library/LaunchDaemons/com.entropylab.ramdisk.plist
+rm -f /usr/local/bin/create_ramdisk.sh
 
-# Unmount the RAM Disk
-if mount | grep -q "RAMDISK"; then
-    diskutil eject /Volumes/RAMDISK
+if mount | grep -q ' /Volumes/RAMDISK '; then
+  diskutil eject /Volumes/RAMDISK || true
 fi
 
-# Delete the entropylab user (Force logout and wipe)
-sudo sysadminctl -deleteUser entropylab
+# Drop the sudoers rule before deleting the user
+rm -f /etc/sudoers.d/entropylab_cleanup
 
-# Reboot the machine immediately to clear RAM and complete destruction
-sudo shutdown -r now
+chflags nouchg /Users/entropylab/entropylab.html 2>/dev/null || true
+sysadminctl -deleteUser entropylab -secure
+
+/sbin/shutdown -r now
 EOF
+sudo chown root:wheel /usr/local/bin/cleanup_entropylab.sh
+sudo chmod 755 /usr/local/bin/cleanup_entropylab.sh
 
-sudo chmod +x /usr/local/bin/cleanup_entropylab.sh
+printf '%s\n' 'entropylab ALL=(root) NOPASSWD: /usr/local/bin/cleanup_entropylab.sh' \
+  | sudo tee /etc/sudoers.d/entropylab_cleanup
+sudo chown root:wheel /etc/sudoers.d/entropylab_cleanup
+sudo chmod 440 /etc/sudoers.d/entropylab_cleanup
+sudo visudo -cf /etc/sudoers.d/entropylab_cleanup
 
-# 2. Grant the entropylab user passwordless sudo rights ONLY for this script
-echo "entropylab ALL=(ALL) NOPASSWD: /usr/local/bin/cleanup_entropylab.sh" | sudo tee /etc/sudoers.d/entropylab_cleanup
-
-# 3. Create the double-clickable .command shortcut in the user's home folder
 sudo tee /Users/entropylab/Self-Destruct.command << 'EOF'
 #!/bin/zsh
-sudo /usr/local/bin/cleanup_entropylab.sh
+/usr/bin/sudo /usr/local/bin/cleanup_entropylab.sh
 EOF
-
-sudo chmod +x /Users/entropylab/Self-Destruct.command
 sudo chown entropylab:staff /Users/entropylab/Self-Destruct.command
+sudo chmod 755 /Users/entropylab/Self-Destruct.command
 
-# 4. Pin the Self-Destruct command to the Dock for visibility
-sudo -u entropylab defaults write com.apple.dock persistent-others -array-add "<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>file:///Users/entropylab/Self-Destruct.command</string><key>_CFURLStringType</key><integer>15</integer></dict></dict><key>tile-type</key><string>file-tile</string></dict>"
+sudo -u entropylab defaults write com.apple.dock persistent-others -array-add '<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>file:///Users/entropylab/Self-Destruct.command</string><key>_CFURLStringType</key><integer>15</integer></dict></dict><key>tile-type</key><string>file-tile</string></dict>'
+sudo -u entropylab killall Dock 2>/dev/null || true
 ```
+
+Self-Destruct **destroys the kiosk user and the daemon**, then reboots. It is not a session logout.
 
 ---
 
-## 📝 Final Operational Notes
+## USB save
 
-### 🔑 USB Access
-The user has full access to USB drives. However, the first time the browser attempts to access a USB drive, macOS will show a **TCC (Transparency, Consent, and Control)** popup.
-- **Action:** Log in as `entropylab` once, perform a USB action, and click **"Allow."** This permission is permanent for that user.
+Chrome/Chromium uses the native macOS file picker. Removable disks show up under `/Volumes/...`.
 
-### 🧹 Data Persistence Summary
-| Component | Storage Location | Persistence |
-| :--- | :--- | :--- |
-| **System Files** | NVMe (Read-Only System Vol) | Permanent |
-| **User Settings** | `/Users/entropylab/Library` | Permanent |
-| **Browser Profile** | `/Volumes/RAMDISK/chrome` | **Volatile (Wiped on Reboot)** |
-| **Browser History** | Incognito Mode | **Volatile (Wiped on Close)** |
+The **first** save to a USB stick triggers a TCC prompt (“Chromium would like to access files on a removable volume”). Log in as `entropylab` once, save a test file, click Allow. That grant is per-app, per-user, and survives reboot. There is no supported command-line way to pre-grant it without a PPPC profile.
 
-### 🛠️ Manual Maintenance
-If the self-destruct button is not used, you can manually remove the environment via:
+## Persistence
+
+| What | Where | Survives reboot? |
+|---|---|---|
+| `entropylab.html` | `/Users/entropylab/` | Yes (optional `uchg`) |
+| Browser profile / cache | `/Volumes/RAMDISK/chrome` | **No** |
+| Incognito session | RAM | **No** (gone on quit) |
+| TCC USB allow | user TCC db | Yes |
+| Dock / SetupAssistant flags | `/Users/entropylab/Library` | Yes, until Self-Destruct |
+
+## Manual cleanup (if you skip Self-Destruct)
+
 ```zsh
-sudo sysadminctl -deleteUser entropylab
-sudo rm /Library/LaunchDaemons/com.entropylab.ramdisk.plist
-sudo rm /usr/local/bin/create_ramdisk.sh
-sudo rm /etc/sudoers.d/entropylab_cleanup
+sudo launchctl bootout system/com.entropylab.ramdisk 2>/dev/null || true
+sudo rm -f /Library/LaunchDaemons/com.entropylab.ramdisk.plist
+sudo rm -f /usr/local/bin/create_ramdisk.sh /usr/local/bin/cleanup_entropylab.sh
+sudo rm -f /etc/sudoers.d/entropylab_cleanup
+sudo chflags nouchg /Users/entropylab/entropylab.html 2>/dev/null || true
+sudo sysadminctl -deleteUser entropylab -secure
 sudo pmset -a sleep 10 disablesleep 0 hibernatemode 3
+if mount | grep -q ' /Volumes/RAMDISK '; then diskutil eject /Volumes/RAMDISK; fi
 ```
+
+## First login checklist
+
+1. Fast User Switch (or log out) into `entropylab`.
+2. RAM disk should already be mounted; browser should go fullscreen on EntropyLab.
+3. Plug in USB → Save As → Allow TCC → confirm a file lands on the stick.
+4. Reboot, confirm the Chrome profile is empty again and the HTML still opens.
