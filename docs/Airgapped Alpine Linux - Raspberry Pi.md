@@ -1,4 +1,4 @@
-# 🛡️ Airgapped Alpine Linux Build Guide
+# 🛡️ Hardened Alpine Linux Build Guide: Raspberry Pi 4/5
 
 **Hardened RAM-Only OS for Raspberry Pi 4/5**
 
