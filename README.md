@@ -137,7 +137,7 @@ Official website: [entropylab.online](https://entropylab.online)
 
 Download the self-contained `entropylab.html` from the
 [official website](https://entropylab.online) or the
-[releases page](https://github.com/w-s-bitcoin/entropylab/releases), transfer it to a trusted
+[releases page](https://github.com/OogaBoogaX/entropylab/releases), transfer it to a trusted
 computer, disconnect that computer from all networks, and open the file in a
 modern browser. For sensitive wallet material, use a dedicated air-gapped
 machine and verify important addresses and descriptors with an independent
@@ -169,12 +169,12 @@ file is still self-contained and never registers the hosted service worker.
 
 Every merge to `rock` publishes a `SHA256SUMS.txt` checksum manifest for
 `entropylab.html` (committed next to it in this repository) and a
-[GitHub artifact attestation](https://github.com/w-s-bitcoin/entropylab/attestations)
+[GitHub artifact attestation](https://github.com/OogaBoogaX/entropylab/attestations)
 for the exact bytes built by CI. After downloading, verify both:
 
 ```sh
 sha256sum -c SHA256SUMS.txt
-gh attestation verify entropylab.html -R w-s-bitcoin/entropylab
+gh attestation verify entropylab.html -R OogaBoogaX/entropylab
 ```
 
 The attestation is keyless (Sigstore) and bound to this repository's release

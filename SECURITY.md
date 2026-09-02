@@ -4,7 +4,7 @@
 
 Only the most recent release receives security fixes. Users are encouraged to
 always use the latest version, available from the
-[releases page](https://github.com/w-s-bitcoin/entropylab/releases) and the
+[releases page](https://github.com/OogaBoogaX/entropylab/releases) and the
 [official website](https://entropylab.online).
 
 | Version | Supported          |
@@ -110,7 +110,7 @@ material. Its security posture rests on the following model:
 ## Reporting a Vulnerability
 
 Please report suspected security issues privately through
-[GitHub Security Advisories](https://github.com/w-s-bitcoin/entropylab/security/advisories/new)
+[GitHub Security Advisories](https://github.com/OogaBoogaX/entropylab/security/advisories/new)
 rather than opening a public issue. If private reporting is unavailable, reach
 the maintainers through the [official website](https://entropylab.online).
 

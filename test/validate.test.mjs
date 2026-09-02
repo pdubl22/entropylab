@@ -187,7 +187,21 @@ test("the release build attests the wallet artifact and ships a checksum manifes
   assert.match(build, /if: github\.ref == 'refs\/heads\/rock' && github\.event_name == 'push'\n\s*uses: actions\/attest-build-provenance/);
   const artifact = workflow.match(/^  artifact:\n(?:.|\n)*?(?=^  [a-z-]+:)/m)?.[0] ?? "";
   assert.match(artifact, /SHA256SUMS\.txt/, "the committed artifact includes the checksum manifest");
-  assert.match(read("README.md"), /gh attestation verify entropylab\.html -R w-s-bitcoin\/entropylab/);
+  assert.match(read("README.md"), /gh attestation verify entropylab\.html -R OogaBoogaX\/entropylab/);
+});
+
+test("repository links follow the Team Ooga Booga ownership", () => {
+  for (const path of ["README.md", "CONTRIBUTING.md", "SECURITY.md", "llms.txt", "src/index.html", "src/js/app.js"]) {
+    assert.doesNotMatch(read(path), /github\.com\/(?:w-s-bitcoin|Team-Ooga-Booga)\/entropylab/, `${path} still links through a former owner`);
+  }
+  assert.match(read("src/index.html"), /https:\/\/github\.com\/OogaBoogaX\/entropylab/);
+});
+
+test("the GHCR image name is normalized for mixed-case organization logins", () => {
+  const workflow = read(".github/workflows/ci-cd.yml");
+  assert.match(workflow, /id: ghcr-image\n\s+run: echo "name=ghcr\.io\/\$\{GITHUB_REPOSITORY,,\}" >> "\$GITHUB_OUTPUT"/);
+  assert.match(workflow, /\$\{\{ steps\.ghcr-image\.outputs\.name \}\}:latest/);
+  assert.doesNotMatch(workflow, /ghcr\.io\/\$\{\{ github\.repository \}\}/);
 });
 
 test("every gate and publication path consumes the single tested candidate (issue #93)", () => {

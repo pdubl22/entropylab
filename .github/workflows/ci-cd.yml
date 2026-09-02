@@ -495,6 +495,9 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Normalize GHCR image name
+        id: ghcr-image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3.6.1
       - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         if: (github.ref == 'refs/heads/rock' && github.event_name == 'push') || (github.event_name == 'workflow_dispatch' && inputs.release-docker)
@@ -507,7 +510,7 @@ jobs:
           context: .
           push: ${{ (github.ref == 'refs/heads/rock' && github.event_name == 'push') || (github.event_name == 'workflow_dispatch' && inputs.release-docker) }}
           tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ${{ steps.ghcr-image.outputs.name }}:latest
+            ${{ steps.ghcr-image.outputs.name }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
