@@ -1,4 +1,3 @@
-```markdown
 # 🛡️ Hardened macOS Kiosk User Guide
 
 **Secure, Low-Persistence Runtime Environment for Apple Silicon**
@@ -71,7 +70,7 @@ Because only the root user can create a RAM disk, we create a **LaunchDaemon**. 
 # Create the script that creates the RAM disk
 sudo tee /usr/local/bin/create_ramdisk.sh << 'EOF'
 #!/bin/zsh
-# Create a 256MB RAM Disk (524288 blocks)
+# Create a 256MB RAM Disk
 RAM_DISK_SIZE=524288 
 RAM_DEV=$(hdiutil attach -nomount ram://$RAM_DISK_SIZE)
 diskutil erasevolume HFS+ "RAMDISK" $RAM_DEV
@@ -84,7 +83,7 @@ sudo chmod +x /usr/local/bin/create_ramdisk.sh
 # Create the LaunchDaemon to run this at boot
 sudo tee /Library/LaunchDaemons/com.entropylab.ramdisk.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "[http://www.apple.com/DTDs/PropertyList-1.0.dtd](http://www.apple.com/DTDs/PropertyList-1.0.dtd)">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -123,7 +122,7 @@ open -a "Google Chrome" --args \
     --disable-software-rasterizer \
     --disable-dev-shm-usage \
     --user-data-dir=/Volumes/RAMDISK/chrome \
-    "[http://127.0.0.1:8080/entropylab.html](http://127.0.0.1:8080/entropylab.html)"
+    "http://127.0.0.1:8080/entropylab.html"
 EOF
 
 sudo chmod +x /Users/entropylab/bin/launch_browser.sh
@@ -140,7 +139,7 @@ sudo chown -R entropylab:staff /Users/entropylab/Library
 
 sudo tee /Users/entropylab/Library/LaunchAgents/com.entropylab.browser.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "[http://www.apple.com/DTDs/PropertyList-1.0.dtd](http://www.apple.com/DTDs/PropertyList-1.0.dtd)">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -159,7 +158,7 @@ sudo chown entropylab:staff /Users/entropylab/Library/LaunchAgents/com.entropyla
 ```
 
 ### 6. The "Self-Destruct" Mechanism
-To allow the restricted user to wipe the environment and reset the system without needing an admin password, we implement a privileged cleanup script. Because the desktop environment is disabled, we pin this script directly to the user's Dock.
+To allow the restricted user to wipe the environment and reset the system without needing an admin password, we implement a privileged cleanup script and pin it to the Dock.
 
 ```zsh
 # 1. Create the root-level cleanup script
@@ -228,6 +227,4 @@ sudo rm /Library/LaunchDaemons/com.entropylab.ramdisk.plist
 sudo rm /usr/local/bin/create_ramdisk.sh
 sudo rm /etc/sudoers.d/entropylab_cleanup
 sudo pmset -a sleep 10 disablesleep 0 hibernatemode 3
-```
-
 ```
