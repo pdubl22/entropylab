@@ -1,203 +1,133 @@
-# 🛡️ Hardened Alpine Linux Build Guide: Apple Silicon (M1/M2/M3/M4)
+# 🛡️ Hardened macOS Kiosk User Guide
 
-**Hardened RAM-Only OS for Apple M-Series Macs**
+**Secure, Low-Persistence Runtime Environment for Apple Silicon**
 
-This guide provides a workflow for creating a hardened Alpine Linux environment on Apple Silicon. It covers both an internal NVMe installation and a bootable USB implementation.
-
-> [!WARNING]
-> **CRITICAL RISK:** This process involves modifying the internal NVMe partition table of your Mac. While the Asahi installer is designed to be safe, a power failure or mistake during partitioning can result in a device that requires a "DFU Restore" using another Mac and Apple Configurator. **Backup your data before proceeding.**
+This guide outlines the process for creating a dedicated, hardened macOS user account designed for a specific application (EntropyLab). The focus is on **minimizing the software attack surface** and **preventing data persistence** by forcing the browser to operate out of a volatile RAM directory.
 
 ## 🎯 Project Goal
 
-To create a "zero-trust" runtime environment on Apple Silicon where the OS resides in RAM, utilizing the Asahi/U-Boot boot chain to maintain the highest possible security posture.
-
-### The Boot Architecture:
-1. **m1n1:** A tiny bootloader that handles the transition from Apple's proprietary environment to a standard one.
-2. **U-Boot:** The "Universal Bootloader" that allows us to boot a standard Linux kernel.
-3. **Alpine (Diskless):** The OS is loaded into a RAM disk (`tmpfs`), meaning no data is written to the NVMe during runtime.
-
----
-
-## 🛠️ Phase 1: System Bootstrap (The Build Machine)
-
-This phase prepares your Mac to build the Alpine image using containers.
-
-```zsh
-# Install Homebrew if missing
-if ! command -v brew &> /dev/null; then
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-fi
-
-brew update
-echo "Installing OrbStack and GNU tools..."
-brew install --cask orbstack
-brew install coreutils gnu-sed
-
-export PATH="/opt/homebrew/bin:$PATH"
-echo "✅ Build Environment Ready."
-```
-
-### 2. Workspace Setup
-
-```zsh
-mkdir -p ~/alpine-m-series/{boot,cache,ovl_root,app_assets}
-cd ~/alpine-m-series
-```
+To create a "disposable" user session where:
+1. **No Onboarding:** The user is dropped directly into the environment without iCloud/Siri prompts.
+2. **Zero Browser Persistence:** Chromium data is stored in `/tmp` and wiped upon reboot.
+3. **Reduced Footprint:** System features (Spotlight, Dock recents) are disabled to minimize background noise.
+4. **Privilege Limitation:** The user is a "Standard User," preventing the installation of system-wide software or modification of system files.
 
 ---
 
-## 🛠️ Phase 2: Creating the Hardened Rootfs
+## 🛠️ Deployment Workflow
 
-We will use a Docker container to "stage" the Alpine filesystem. Since we want this to be airgapped, we follow the same `apkovl` (overlay) logic as the Pi guide.
+Execute these steps from an **Administrator** account.
 
-### 1. Fetching Packages
-This downloads the minimal set of tools needed for a functional, hardened GUI.
+### 1. User Creation
+We use `sysadminctl` to ensure the user is created with the correct Secure Token for Apple Silicon hardware.
 
 ```zsh
-docker run --rm -v $(pwd):/work -w /work --platform linux/arm64 alpine:latest sh -c "
-  apk update && \
-  apk fetch --recursive -o /work/cache \
-    alpine-base \
-    cage \
-    chromium \
-    font-dejavu \
-    mesa-dri-gallium \
-    wayland-protocols \
-    eudev \
-    httpd
-"
+# Replace 'UserPassword123' with your desired password
+sudo sysadminctl -addUser entropylab -fullName "EntropyLab" -password "UserPassword123"
 ```
 
-### 2. The Hardened Overlay (`apkovl`)
-We now create the configuration that will be injected into RAM at boot.
+### 2. System Silence & Hardening
+These commands trick macOS into thinking the "Welcome" process is complete and disable invasive features that could lead to data leaks or software prompts.
 
-**2.1 Privilege Separation & App Setup**
 ```zsh
-mkdir -p ovl_root/home/entropylab
-mkdir -p ovl_root/var/www/entropylab
-cp -R app_assets/* ovl_root/var/www/entropylab/
-chmod -R 755 ovl_root/var/www/entropylab
+USER_NAME="entropylab"
+
+echo "Applying hardening flags for $USER_NAME..."
+
+# --- Skip Onboarding & Popups ---
+sudo -u $USER_NAME defaults write com.apple.setupassistant SetupDone -bool true
+sudo -u $USER_NAME defaults write com.apple.Siri SiriEnabled -bool false
+sudo -u $USER_NAME defaults write com.apple.icloud iCloudDriveEnabled -bool false
+sudo -u $USER_NAME defaults write com.apple.ApplePay SetupCompleted -bool true
+sudo -u $USER_NAME defaults write com.apple.screentime SetupCompleted -bool true
+
+# --- UI & Privacy Hardening ---
+# Disable Spotlight suggestions (prevents searching for system tools)
+sudo -u $USER_NAME defaults write com.apple.Spotlight ShowAllSuggestions -bool false
+# Remove recently used apps from Dock
+sudo -u $USER_NAME defaults write com.apple.dock show-recents -bool false
+# Disable 'Get Info' to prevent inspection of folder permissions
+sudo -u $USER_NAME defaults write com.apple.finder DisableGetInfo -bool true
+# Hide desktop icons for a cleaner, appliance-like feel
+sudo -u $USER_NAME defaults write com.apple.finder CreateDesktop -bool false
+
+echo "✅ System flags applied."
 ```
 
-**2.2 Startup Service (The Kiosk)**
-This script ensures that when Alpine boots, it immediately launches the browser as a low-privileged user.
+### 3. The Hardened Browser Wrapper
+To ensure the browser is truly "RAM-only," we create a launch script that redirects the user profile to the `/tmp` directory. This ensures that history, cookies, and cache are deleted when the machine is restarted.
 
 ```zsh
-mkdir -p ovl_root/etc/init.d
-cat << 'EOF' > ovl_root/etc/init.d/entropylab
-#!/sbin/openrc-run
-name="EntropyLab App"
+# Create a local bin directory for the user
+sudo mkdir -p /Users/entropylab/bin
+sudo chown entropylab:staff /Users/entropylab/bin
 
-depend() {
-    after localmount
-    keyword -jail
-}
+# Create the launch script
+sudo tee /Users/entropylab/bin/launch_browser.sh << 'EOF'
+#!/bin/zsh
+# Clear existing chrome tmp data to ensure a fresh session
+rm -rf /tmp/chrome
 
-start() {
-    ebegin "Starting Hardened Kiosk"
-    # Create unprivileged user
-    if ! id -u entropylab > /dev/null 2>&1; then
-        adduser -D -u 1000 -s /bin/ash entropylab
-    fi
-    
-    export XDG_RUNTIME_DIR=/tmp/runtime-root
-    mkdir -p $XDG_RUNTIME_DIR
-    chown -R entropylab:entropylab $XDG_RUNTIME_DIR
-    chmod 0700 $XDG_RUNTIME_DIR
-    
-    # Local web server for SOP sandbox
-    httpd -p 127.0.0.1:8080 -h /var/www/entropylab -u nobody:nobody
-    
-    # Launch Chromium via Cage (Wayland)
-    su - entropylab -c "
-      export XDG_RUNTIME_DIR=/tmp/runtime-root
-      cage -d -- chromium-browser \
-        --incognito --no-first-run --disable-sync \
-        --user-data-dir=/tmp/chrome \
-        http://127.0.0.1:8080/entropylab.html &
-    "
-    eend $?
-}
+# Launch Chromium/Chrome with hardening flags
+# --user-data-dir=/tmp/chrome is the key to zero persistence
+open -a "Google Chrome" --args \
+    --incognito \
+    --no-first-run \
+    --disable-sync \
+    --disable-extensions \
+    --disable-component-update \
+    --disable-notifications \
+    --user-data-dir=/tmp/chrome \
+    "http://127.0.0.1:8080/entropylab.html"
 EOF
-chmod +x ovl_root/etc/init.d/entropylab
+
+# Set permissions
+sudo chmod +x /Users/entropylab/bin/launch_browser.sh
+sudo chown -R entropylab:staff /Users/entropylab/bin
 ```
 
-**2.3 Finalizing the Overlay**
-```zsh
-mkdir -p ovl_root/etc/runlevels/{sysinit,default}
-ln -s /etc/init.d/entropylab ovl_root/etc/runlevels/default/entropylab
-tar -czf boot/localhost.apkovl.tar.gz -C ovl_root .
-```
-
----
-
-## 🛠️ Phase 3: The Bootloader Installation
-
-**This is the most critical part.** You cannot simply "copy" a bootloader to a Mac. You must use the Asahi installer to create the required partitions.
-
-### Option A: Internal NVMe Installation
-1. **Run the Asahi Installer:**
-   Open your terminal in macOS and run:
-   ```zsh
-   curl https://alx.sh | sh
-   ```
-2. **Follow the prompts:** 
-   - Choose the size for the Linux installation (since we are using a RAM-disk, you only need ~10GB).
-   - The installer will resize your macOS partition and create the **m1n1** and **U-Boot** partitions.
-   - **STOP** when the installer asks to install the full OS (Fedora/Asahi). You only need the bootloader chain.
-3. **Boot into the newly created Linux partition.**
-4. **Replace the Rootfs:**
-   Once booted into the temporary Asahi environment, mount the root partition and replace the contents with your `cache` and `boot` folders from the `~/alpine-m-series` directory.
-
-### Option B: Bootable USB Installation
-To make a USB bootable on M-series, you still need the Mac's internal NVRAM to point to a bootloader.
-
-1. **Prepare the USB:**
-   Format a USB drive as **FAT32 (MBR)**.
-2. **Copy the Chain:**
-   You must copy the `m1n1` binary and the `U-Boot` binary to the root of the USB. 
-   *(Note: These binaries are specific to your M-chip version—M1 vs M2. You can extract these from the Asahi installer's build artifacts).*
-3. **The Alpine Image:**
-   Copy the `cache` and `boot` folders (containing your `localhost.apkovl.tar.gz`) to the USB.
-4. **Booting:**
-   - Shut down the Mac.
-   - Hold the **Power Button** until "Loading Startup Options" appears.
-   - Select the USB drive.
-
----
-
-## 🛠️ Phase 4: Final Hardening (The Mac Way)
-
-To complete the "Airgapped" nature of the build, we must disable the Mac's wireless radios.
-
-### 1. Disabling Network in Kernel
-Since we are using a custom Alpine build, we modify the `cmdline.txt` (or the U-Boot script) to disable the network stack:
+### 4. Automation: Launch on Login
+We create a `launchd` agent so the browser starts automatically the moment the `entropylab` user logs in.
 
 ```zsh
-# Edit your boot arguments to include:
-# ip=off
-```
+sudo tee /Users/entropylab/Library/LaunchAgents/com.entropylab.browser.plist << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.entropylab.browser</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/entropylab/bin/launch_browser.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+EOF
 
-### 2. U-Boot Lockdown
-If you have access to the U-Boot prompt (by hitting a key during boot), you can disable the network boot attempts to speed up boot time and increase security:
-```bash
-setenv bootdelay 0
-saveenv
+sudo chown entropylab:staff /Users/entropylab/Library/LaunchAgents/com.entropylab.browser.plist
 ```
 
 ---
 
-## 📋 Summary Checklist for the User
+## 📝 Final Operational Notes
 
-| Step | Action | Purpose |
+### 🔑 USB Access
+The user will have full access to USB drives. However, the first time the browser attempts to save a file to or read from a USB drive, macOS will show a **TCC (Transparency, Consent, and Control)** popup. 
+- **Action:** Log in as `entropylab` once, perform a USB action, and click **"Allow."** This permission is permanent for that user.
+
+### 🧹 Data Persistence Summary
+| Component | Storage Location | Persistence |
 | :--- | :--- | :--- |
-| **1** | Run OrbStack Script | Prepares the "factory" to build the OS. |
-| **2** | Build `apkovl` | Creates the secure, RAM-only configuration. |
-| **3** | Run `alx.sh` | Safely carves out space on the Mac NVMe for Linux. |
-| **4** | Deploy Alpine | Moves the RAM-disk assets into the Asahi partition. |
-| **5** | Boot & Lock | Sets `ip=off` to ensure the device is airgapped. |
+| **System Files** | NVMe (Read-Only System Vol) | Permanent |
+| **User Settings** | `/Users/entropylab/Library` | Permanent |
+| **Browser Profile** | `/tmp/chrome` | **Volatile (Wiped on Reboot)** |
+| **Browser History** | Incognito Mode | **Volatile (Wiped on Close)** |
 
-### 🚀 Troubleshooting
-- **Stuck at Apple Logo?** Your `m1n1` version likely doesn't match your chip (e.g., using M1 bootloader on M2). Re-run the Asahi installer.
-- **OOM (Out of Memory)?** Apple Silicon Macs usually have 8GB+ RAM, but if using a very lean model, ensure you aren't loading unnecessary packages into the `apk fetch` step.
-- **No GPU Acceleration?** Ensure `mesa-dri-gallium` is included in the package fetch; otherwise, Chromium will be extremely slow.
+### 🛠️ Maintenance
+To completely reset the user environment, you can simply delete the user and run the script again:
+```zsh
+sudo sysadminctl -deleteUser entropylab
+```
