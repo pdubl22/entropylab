@@ -51,8 +51,9 @@ sudo -u $USER_NAME defaults write com.apple.finder ShowExternalVolumesOnDesktop 
 sudo -u $USER_NAME defaults write com.apple.finder ShowHardDisksOnDesktop -bool false
 
 # --- Power Management ---
-# Disable sleep and screen saver to prevent interruptions during entropy generation
-sudo pmset -a sleep 0 disablesleep 1
+# Disable sleep, screen saver, and hibernation to prevent interruptions 
+# and prevent RAM contents from being written to the NVMe sleepimage.
+sudo pmset -a sleep 0 disablesleep 1 hibernatemode 0
 sudo -u $USER_NAME defaults write com.apple.screensaver idleTime -int 0
 
 echo "✅ System flags applied."
@@ -157,7 +158,7 @@ sudo tee /usr/local/bin/cleanup_entropylab.sh << 'EOF'
 echo "🧹 Self-Destruct Initiated..."
 
 # Reset System Power Settings (Return to 10m sleep)
-sudo pmset -a sleep 10 disablesleep 0
+sudo pmset -a sleep 10 disablesleep 0 hibernatemode 3
 
 # Remove the System-Level RAM Disk Engine
 sudo rm -f /Library/LaunchDaemons/com.entropylab.ramdisk.plist
@@ -210,5 +211,5 @@ sudo sysadminctl -deleteUser entropylab
 sudo rm /Library/LaunchDaemons/com.entropylab.ramdisk.plist
 sudo rm /usr/local/bin/create_ramdisk.sh
 sudo rm /etc/sudoers.d/entropylab_cleanup
-sudo pmset -a sleep 10
+sudo pmset -a sleep 10 disablesleep 0 hibernatemode 3
 ```
