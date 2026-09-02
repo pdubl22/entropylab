@@ -502,7 +502,7 @@ hodlRootEl.innerHTML = `
       <div class="tool-intro" id="calc-tool-intro">
         <div class="kicker">Your entropy enters the lab</div>
         <h2>Create. Derive. Verify.</h2>
-        <p class="muted calc-intro">Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+        <p class="muted calc-intro">Turn entropy you bring \u2014 dice rolls, playing cards, a number in any base, a seed phrase, or a private key \u2014 into a BIP-39 seed, then derive its master fingerprint, extended public keys, and receive addresses. The dice methods match COLDCARD, SeedSigner, Keystone, and BitBox, so the same rolls reproduce the same seed on those signers. This does not invent entropy \u2014 it is a calculator, and nothing leaves this page.</p>
       </div>
       <section class="key-manager no-print" id="key-manager">
       <div class="key-tab-strip"><div class="key-tabs" id="key-tabs" role="tablist" aria-label="Keys"></div><div class="add-item-control"><button class="add-key" id="add-key" type="button" aria-label="Open Key Station to derive another key" aria-describedby="add-key-tooltip">+</button><span class="add-item-tooltip" id="add-key-tooltip" role="tooltip">Open Key Station to derive another key</span></div><div class="add-item-control"><button class="add-key remove-key" id="delete-key" type="button" aria-label="Delete current key" aria-describedby="delete-key-tooltip" disabled>−</button><span class="add-item-tooltip" id="delete-key-tooltip" role="tooltip">Delete this key</span></div></div>
@@ -886,6 +886,19 @@ hodlRootEl.innerHTML = `
         <h2>Read a PSBT or a signed transaction.</h2>
         <p class="muted tool-intro-note">Inspecting a PSBT v0 or a raw Bitcoin transaction does not require a private key. EntropyLab can show outputs, PSBT-provided input amounts and fees, signatures, and repeated ECDSA nonce values. Optional Jade anti-exfil transcripts (host nonce \u03C1 and signer opening R) are checked without a key. Finalized taproot witnesses and tap-leaf scripts are scanned for inscription envelopes (OP_FALSE OP_IF "ord"); this does not number sats or fetch content from the chain. Loading a matching key additionally labels which outputs belong to this wallet (change vs receive vs not yours) and checks whether supported signatures match plain RFC 6979 or Bitcoin Core-style low-r grinding; a mismatch alone is not evidence of a compromised signer.</p>
       </div>
+    <div class="tool-intro" id="psbted-tool-intro" hidden>
+        <div class="kicker">Full-fidelity editor. Sign elsewhere.</div>
+        <h2>Edit a PSBT, field by field.</h2>
+        <p class="muted tool-intro-note">A BIP-174 editor in the spirit of bip174.org, backed by rust-bitcoin compiled to WebAssembly. Every key-value pair of the global, per-input and per-output maps is shown with a typed decode (BIP-174 and BIP-371 taproot fields) and stays editable as raw hex, and the unsigned transaction's version, locktime, input prevouts/sequences and output amounts/scripts get structured fields. Every edit rebuilds the file through rust-bitcoin as you type — the fields always show its decode of the current build — and the result follows live as base64, hex, a downloadable .psbt and a QR code (a single static code, or an animated ur:crypto-psbt sequence for larger files). A binary .psbt file as saved by Sparrow, Coldcard or another wallet uploads directly. PSBT v0 only; unknown and proprietary pairs round-trip untouched. Editing never signs anything.</p>
+      </div>
+    <section class="key-manager no-print" id="psbt-manager" hidden>
+      <div class="key-tab-strip">
+        <div class="key-tabs" id="psbt-tool-tabs" role="tablist" aria-label="PSBT stations">
+          <button class="tab key-tab is-lab active" id="psbt-nonce-tab" type="button" role="tab" aria-selected="true" aria-controls="psbt-card" data-psbt-tool="nonce" data-i18n="workspace.psbtNonce">PSBT / Nonce</button>
+          <button class="tab key-tab is-lab" id="psbt-editor-tab" type="button" role="tab" aria-selected="false" aria-controls="psbted-card" data-psbt-tool="editor" data-i18n="workspace.psbted">PSBT Editor</button>
+        </div>
+      </div>
+    </section>
       <section class="card no-print" id="psbt-card" role="tabpanel" hidden>
       <label class="field">PSBT v0 or raw transaction (base64 or hex)
         <textarea id="psbt-text" placeholder="cHNidP8B\u2026 or 020000000001\u2026" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
@@ -917,11 +930,6 @@ hodlRootEl.innerHTML = `
       <div id="psbt-out" aria-live="polite"></div>
       <p class="muted" data-i18n="psbt.sessionNote">Session keys remain in this page only and are never intentionally stored or sent. Memory clearing is best-effort because browsers may retain internal copies; close the page before reconnecting the computer.</p>
     </section>
-    <div class="tool-intro" id="psbted-tool-intro" hidden>
-        <div class="kicker">Full-fidelity editor. Sign elsewhere.</div>
-        <h2>Edit a PSBT, field by field.</h2>
-        <p class="muted tool-intro-note">A BIP-174 editor in the spirit of bip174.org, backed by rust-bitcoin compiled to WebAssembly. Every key-value pair of the global, per-input and per-output maps is shown with a typed decode (BIP-174 and BIP-371 taproot fields) and stays editable as raw hex, and the unsigned transaction's version, locktime, input prevouts/sequences and output amounts/scripts get structured fields. Every edit rebuilds the file through rust-bitcoin as you type — the fields always show its decode of the current build — and the result follows live as base64, hex, a downloadable .psbt and a QR code (a single static code, or an animated ur:crypto-psbt sequence for larger files). A binary .psbt file as saved by Sparrow, Coldcard or another wallet uploads directly. PSBT v0 only; unknown and proprietary pairs round-trip untouched. Editing never signs anything.</p>
-      </div>
       <section class="card no-print" id="psbted-card" role="tabpanel" hidden>
       <label class="field">PSBT v0 (base64 or hex)
         <textarea id="psbted-text" placeholder="cHNidP8B..." spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
@@ -11038,15 +11046,14 @@ function hodlShowWorkspace(id) {
   document.getElementById("sp-manager").hidden = id !== "sp";
   document.getElementById("calc-card").hidden = true;
   document.getElementById("msig-card").hidden = true;
-  document.getElementById("psbt-card").hidden = id !== "psbt";
-  document.getElementById("psbted-card").hidden = id !== "psbted";
   document.getElementById("bip85-card").hidden = id !== "bip85";
   document.getElementById("sp-card").hidden = id !== "sp";
   // The context block sits outside its tool's card, so it is shown and hidden
   // with the card rather than by it.
-  ["psbt", "psbted", "bip85", "sp", "msig", "calc"].forEach((tool) => {
+  ["bip85", "sp", "msig", "calc"].forEach((tool) => {
     document.getElementById(`${tool}-tool-intro`).hidden = id !== tool;
   });
+  hodlSyncPsbtTool();
   hodlWalletResult = null;
   hodlRevealPrivate = false;
   hodlOutEl.innerHTML = "";
@@ -11160,7 +11167,49 @@ function hodlInitDefaultTabStates() {
 }
 // Each tool carries a full name and a short one. Narrow screens show the
 // short form so more tools stay on screen instead of off the right edge.
-var hodlWorkspaceTabs = [["calc", "workspace.key", "workspace.keyShort"], ["bip85", "workspace.bip85", "workspace.bip85Short"], ["msig", "workspace.msig", "workspace.msigShort"], ["sp", "workspace.sp", "workspace.spShort"], ["psbt", "workspace.psbt", "workspace.psbtShort"], ["psbted", "workspace.psbted", "workspace.psbtedShort"]];
+var hodlWorkspaceTabs = [["calc", "workspace.key", "workspace.keyShort"], ["bip85", "workspace.bip85", "workspace.bip85Short"], ["msig", "workspace.msig", "workspace.msigShort"], ["sp", "workspace.sp", "workspace.spShort"], ["psbt", "workspace.psbt", "workspace.psbtShort"]];
+var hodlPsbtTool = "nonce";
+function hodlSyncPsbtTool() {
+  let visible = hodlWorkspace === "psbt",
+      manager = document.getElementById("psbt-manager"),
+      tabs = document.getElementById("psbt-tool-tabs");
+  if (manager) manager.hidden = !visible;
+  if (tabs) {
+    tabs.querySelectorAll("[data-psbt-tool]").forEach((button) => {
+      let active = button.dataset.psbtTool === hodlPsbtTool;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", String(active));
+      button.tabIndex = active ? 0 : -1;
+    });
+  }
+  document.getElementById("psbt-tool-intro").hidden = !visible || hodlPsbtTool !== "nonce";
+  document.getElementById("psbt-card").hidden = !visible || hodlPsbtTool !== "nonce";
+  document.getElementById("psbted-tool-intro").hidden = !visible || hodlPsbtTool !== "editor";
+  document.getElementById("psbted-card").hidden = !visible || hodlPsbtTool !== "editor";
+}
+function hodlShowPsbtTool(id, focus = false) {
+  hodlPsbtTool = id === "editor" ? "editor" : "nonce";
+  hodlSyncPsbtTool();
+  if (focus) document.querySelector(`#psbt-tool-tabs [data-psbt-tool="${hodlPsbtTool}"]`)?.focus();
+}
+function hodlInitPsbtToolTabs() {
+  let buttons = [...document.querySelectorAll("#psbt-tool-tabs [data-psbt-tool]")];
+  buttons.forEach((button, index) => {
+    button.onclick = () => hodlShowPsbtTool(button.dataset.psbtTool);
+    button.onkeydown = (event) => {
+      let next = null;
+      if (event.key === "ArrowRight") next = (index + 1) % buttons.length;
+      else if (event.key === "ArrowLeft") next = (index - 1 + buttons.length) % buttons.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = buttons.length - 1;
+      if (next === null) return;
+      event.preventDefault();
+      hodlShowPsbtTool(buttons[next].dataset.psbtTool, true);
+    };
+  });
+  hodlInitTabDrag(document.getElementById("psbt-tool-tabs"));
+  hodlSyncPsbtTool();
+}
 // The switcher keeps every tool on screen as a folder-tab strip that scrolls
 // when it must, in the shape the Keys section uses for its own tabs.
 function hodlWorkspaceTabKeydown(event, index) {
@@ -11232,6 +11281,7 @@ function hodlInitWorkspace() {
   strip.addEventListener("scroll", hodlSyncWorkspaceOverflow, { passive: true });
   addEventListener("resize", hodlSyncWorkspaceOverflow);
   new ResizeObserver(hodlSyncWorkspaceOverflow).observe(strip);
+  hodlInitPsbtToolTabs();
   hodlInitMsig();
   hodlInitPsbt();
   initPsbtEditor();

@@ -30,10 +30,14 @@
     button.setAttribute("aria-expanded", "false");
     const label = document.createElement("span");
     label.className = "custom-select-value";
-    const chevron = document.createElement("span");
-    chevron.className = "custom-select-chevron";
+    const chevron = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    chevron.setAttribute("class", "custom-select-chevron");
+    chevron.setAttribute("viewBox", "0 0 24 24");
     chevron.setAttribute("aria-hidden", "true");
-    chevron.textContent = "▼";
+    chevron.setAttribute("focusable", "false");
+    const chevronPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    chevronPath.setAttribute("d", "m6 9 6 6 6-6");
+    chevron.append(chevronPath);
     button.append(label, chevron);
     const list = document.createElement("div");
     list.className = "custom-select-list";

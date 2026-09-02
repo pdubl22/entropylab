@@ -267,6 +267,23 @@
     assert(!Object.keys(localStorage).some((key) => /network/i.test(key)), "The network choice must not persist to storage");
   });
 
+  await test("language and form dropdowns use the network picker's caret styling", async () => {
+    const networkButton = document.getElementById("network-picker-button");
+    const languageButton = document.querySelector(".locale-control .custom-select-button");
+    assert(networkButton && languageButton, "The network or language dropdown is missing");
+    const networkStyle = getComputedStyle(networkButton), languageStyle = getComputedStyle(languageButton);
+    equal(languageStyle.minHeight, networkStyle.minHeight, "Language dropdown height differs from Network");
+    equal(languageStyle.backgroundColor, networkStyle.backgroundColor, "Language dropdown background differs from Network");
+    equal(languageStyle.borderRadius, networkStyle.borderRadius, "Language dropdown radius differs from Network");
+    const networkCaret = networkButton.querySelector(".network-picker-chevron path");
+    const customCarets = [...document.querySelectorAll(".custom-select-chevron")];
+    assert(networkCaret && customCarets.length > 0, "Dropdown carets are missing");
+    customCarets.forEach((caret, index) => {
+      equal(caret.tagName, "svg", `Dropdown ${index} still uses a text triangle`);
+      equal(caret.querySelector("path")?.getAttribute("d"), networkCaret.getAttribute("d"), `Dropdown ${index} caret differs from Network`);
+    });
+  });
+
   await test("limited private-key prefixes replace the full keypad until selected", async () => {
     await chooseMode("Private key");
     const privateKey = await until(() => document.getElementById("key"), "private-key input");
@@ -851,9 +868,9 @@
   await test("tool tabs answer the arrow keys and name themselves in full", async () => {
     const strip = document.getElementById("workspace-tabs");
     const tabs = [...strip.querySelectorAll("[data-workspace]")];
-    assert(tabs.length === 6, `Expected six tool tabs, found ${tabs.length}`);
+    assert(tabs.length === 5, `Expected five tool tabs, found ${tabs.length}`);
     // The visible label may be abbreviated; the accessible name never is.
-    const names = ["Keys", "BIP-85", "Multi Signature", "Silent Payments", "PSBT / Nonce", "PSBT Editor"];
+    const names = ["Keys", "BIP-85", "Multi Signature", "Silent Payments", "PSBT"];
     tabs.forEach((tab, i) => {
       assert(tab.getAttribute("aria-label") === names[i], `Tab ${i} should be named "${names[i]}"`);
     });
@@ -866,15 +883,30 @@
       await until(() => !document.getElementById("bip85-card").hidden, "BIP-85 to open on ArrowRight");
       assert(document.activeElement === tabs[1], "Focus should follow the arrow key");
       assert(tabs[1].getAttribute("aria-selected") === "true", "The reached tab should be selected");
-      // End jumps to the last tool, Home returns to the first.
+      // End jumps to the last tool, the unified PSBT workspace.
       tabs[1].dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
-      await until(() => !document.getElementById("psbted-card").hidden, "End to reach the last tool");
-      assert(document.activeElement === tabs[5], "End should move focus to the last tab");
-      tabs[5].dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+      await until(() => !document.getElementById("psbt-card").hidden, "End to reach the PSBT tool");
+      assert(document.activeElement === tabs[4], "End should move focus to the last tab");
+      const psbtTabs = [...document.querySelectorAll("#psbt-tool-tabs [data-psbt-tool]")];
+      equal(psbtTabs.length, 2, "PSBT should expose exactly two internal tabs");
+      equal(psbtTabs.map((tab) => tab.textContent.trim()).join("|"), "PSBT / Nonce|PSBT Editor");
+      const psbtManager = document.getElementById("psbt-manager");
+      assert(psbtManager && !psbtManager.hidden, "PSBT station tabs should be visible inside the PSBT tool");
+      psbtTabs.forEach((tab) => assert(tab.classList.contains("key-tab"), "PSBT stations should use folder-style Key Station tabs"));
+      equal(getComputedStyle(document.getElementById("psbt-card")).borderTopLeftRadius, "0px", "The active PSBT station card should join its folder tab");
+      psbtTabs[0].focus();
+      psbtTabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      await until(() => !document.getElementById("psbted-card").hidden, "ArrowRight to open PSBT Editor");
+      assert(document.activeElement === psbtTabs[1], "Focus should follow the PSBT subtab arrow key");
+      psbtTabs[1].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+      await until(() => !document.getElementById("psbt-card").hidden, "ArrowLeft to open PSBT / Nonce");
+      assert(document.activeElement === psbtTabs[0], "Focus should return to PSBT / Nonce");
+      // Home returns to the first top-level tool.
+      tabs[4].dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
       await until(() => document.activeElement === tabs[0], "Home to return to the first tab");
       // Left from the first wraps round to the last.
       tabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-      await until(() => document.activeElement === tabs[5], "ArrowLeft to wrap to the last tab");
+      await until(() => document.activeElement === tabs[4], "ArrowLeft to wrap to the last tab");
     } finally {
       document.querySelector('#workspace [data-workspace="calc"]').click();
       await until(() => !document.getElementById("key-manager").hidden, "key workspace");
@@ -1320,6 +1352,7 @@
     assert(window.__browserTestInjected !== true, "Multisig input injected markup");
     assert(!/[="]/.test(xpub.value), "Dangerous characters remained in multisig input");
     document.querySelector('#workspace [data-workspace="psbt"]').click();
+    document.querySelector('#psbt-tool-tabs [data-psbt-tool="nonce"]').click();
     const psbt = await until(() => document.getElementById("psbt-text"), "PSBT input");
     input(psbt, payload);
     document.getElementById("psbt-go").click();
@@ -1333,7 +1366,9 @@
     // BIP-174 valid vector 2 (rust-bitcoin's valid_vector_2): two inputs —
     // a finalized P2PKH scriptSig and a nested P2WPKH — and two outputs.
     const vector = "cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA";
-    document.querySelector('#workspace [data-workspace="psbted"]').click();
+    document.querySelector('#workspace [data-workspace="psbt"]').click();
+    document.querySelector('#psbt-tool-tabs [data-psbt-tool="editor"]').click();
+    await until(() => !document.getElementById("psbted-card").hidden, "PSBT editor tab");
     const box = await until(() => document.getElementById("psbted-text"), "PSBT editor input");
     input(box, vector);
     document.getElementById("psbted-load").click();
@@ -1369,6 +1404,8 @@
     // with "Coin type must be a whole number".
     const vector = "cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA";
     document.querySelector('#workspace [data-workspace="psbt"]').click();
+    document.querySelector('#psbt-tool-tabs [data-psbt-tool="nonce"]').click();
+    await until(() => !document.getElementById("psbt-card").hidden, "PSBT / Nonce tab");
     const box = await until(() => document.getElementById("psbt-text"), "PSBT input");
     input(box, vector);
     document.getElementById("psbt-go").click();
@@ -1413,7 +1450,9 @@
 
   await test("PSBT editor truncates long fields and the overlay edits them", async () => {
     const vector = "cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA";
-    document.querySelector('#workspace [data-workspace="psbted"]').click();
+    document.querySelector('#workspace [data-workspace="psbt"]').click();
+    document.querySelector('#psbt-tool-tabs [data-psbt-tool="editor"]').click();
+    await until(() => !document.getElementById("psbted-card").hidden, "PSBT editor tab");
     const box = await until(() => document.getElementById("psbted-text"), "PSBT editor input");
     input(box, vector);
     document.getElementById("psbted-load").click();
@@ -1482,7 +1521,9 @@
   await test("PSBT editor flow diagram opens, edits, and re-decodes a map", async () => {
     // Same BIP-174 valid vector 2 as the editor cases above.
     const vector = "cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA";
-    document.querySelector('#workspace [data-workspace="psbted"]').click();
+    document.querySelector('#workspace [data-workspace="psbt"]').click();
+    document.querySelector('#psbt-tool-tabs [data-psbt-tool="editor"]').click();
+    await until(() => !document.getElementById("psbted-card").hidden, "PSBT editor tab");
     const box = await until(() => document.getElementById("psbted-text"), "PSBT editor input");
     input(box, vector);
     document.getElementById("psbted-load").click();

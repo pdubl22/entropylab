@@ -111,6 +111,9 @@ function makeHarness({ optionIcon } = {}) {
       element.ownerDocument = document;
       return element;
     },
+    createElementNS(_namespace, tagName) {
+      return this.createElement(tagName);
+    },
     querySelectorAll(selector) { return selector === "select" ? [select] : []; },
     addEventListener(name, listener) { listeners.set(name, [...(listeners.get(name) || []), listener]); },
     listeners,
@@ -149,6 +152,17 @@ test("custom option finishes the tap before dispatching change", async () => {
 
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.deepEqual(calls, ["preventDefault", "stopPropagation", "change:true"]);
+});
+
+test("custom selects use the same stroked caret as the network picker", () => {
+  const { root } = makeHarness();
+  const caret = root.children[0].children[1];
+  assert.equal(caret.tagName, "SVG");
+  assert.equal(caret.attributes.get("class"), "custom-select-chevron");
+  assert.equal(caret.attributes.get("viewBox"), "0 0 24 24");
+  assert.equal(caret.children[0].tagName, "PATH");
+  assert.equal(caret.children[0].attributes.get("d"), "m6 9 6 6 6-6");
+  assert.doesNotMatch(source, /▼/);
 });
 
 test("deferred change is not sent to a select removed during activation", async () => {

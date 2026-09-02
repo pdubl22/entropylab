@@ -784,6 +784,14 @@ td { border-top: 1px solid var(--border); padding: 8px; vertical-align: top; fon
   background: var(--bg); color: var(--fg); font-size: 13px; font-weight: 600; letter-spacing: 0.04em;
 }
 .locale-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* enhanced-inputs.js swaps the select for a custom listbox whose form chrome
+   (44px minimum, control margin, mono face) would bulge out of the 52px bar.
+   In the header the generated control wears the header-button sizing instead. */
+.locale-control .custom-select { flex: 0 0 auto; width: auto; margin-top: 0; font-family: inherit; font-size: 14px; }
+.locale-control .custom-select-button {
+  min-height: 40px; padding: 0 12px; border-radius: 8px; gap: 7px;
+  background: var(--surface-2); color: var(--fg); font-weight: 600; letter-spacing: 0.04em;
+}
 .theme-toggle svg { display: none; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .theme-toggle[data-theme-mode="dark"] .theme-icon-dark, .theme-toggle[data-theme-mode="light"] .theme-icon-light { display: block; }
 .btn:is(.download-html, .save-recovery-sheet, .save-wallet-dat) {
@@ -806,7 +814,11 @@ td { border-top: 1px solid var(--border); padding: 8px; vertical-align: top; fon
   background: var(--bg); color: var(--fg); text-align: left; cursor: pointer;
 }
 .custom-select-button:hover, .custom-select.open .custom-select-button { border-color: var(--accent); }
-.custom-select-chevron { color: var(--accent); font-size: 12px; transition: transform 120ms ease; }
+.custom-select-chevron {
+  display: block; flex: 0 0 auto; width: 12px; height: 12px;
+  fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round;
+  color: var(--accent); transition: transform 120ms ease;
+}
 .custom-select.open .custom-select-chevron { transform: rotate(180deg); }
 .custom-select-list {
   position: absolute; z-index: 100; top: calc(100% + 6px); left: 0; right: 0; max-height: 260px;
@@ -1124,7 +1136,7 @@ input.bad, textarea.bad { border-color: var(--danger) !important; }
 .segmented-control.is-stacked > .tab:last-child { border-radius: 0 0 8px 8px; }
 .segmented-control.is-stacked > .tab:only-child { border-radius: 8px; }
 #msig-card[hidden], #calc-card[hidden], #psbt-card[hidden], #psbted-card[hidden], #bip85-card[hidden], #sp-card[hidden] { display: none !important; }
-#calc-card:not([hidden]), #msig-card:not([hidden]), #bip85-card:not([hidden]), #sp-card:not([hidden]) { margin-top: 0; border-radius: 0 0 20px 20px; position: relative; z-index: 1; }
+#calc-card:not([hidden]), #msig-card:not([hidden]), #bip85-card:not([hidden]), #sp-card:not([hidden]), #psbt-card:not([hidden]), #psbted-card:not([hidden]) { margin-top: 0; border-radius: 0 0 20px 20px; position: relative; z-index: 1; }
 .psbt-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 14px; }
 @media (min-width: 720px) {
   .psbt-grid { grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr); }
