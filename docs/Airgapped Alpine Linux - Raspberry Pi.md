@@ -2,7 +2,7 @@
 
 **Hardened RAM-only OS for Raspberry Pi 4/5**
 
-This guide builds a bootable drive or image that boots Alpine diskless, then launches EntropyLab in Chromium on a local Wayland session. Optimized for Apple Silicon (M1–M4) using OrbStack.
+This guide builds a bootable drive or image that boots Alpine diskless, then launches **[OogaBoogaX/entropylab `entropylab.html`](https://github.com/OogaBoogaX/entropylab/blob/rock/entropylab.html)** in Chromium on a local Wayland session. Optimized for Apple Silicon (M1–M4) using OrbStack.
 
 The browser is **fullscreen, not kiosk**. Kiosk mode hides Chromium chrome and blocks the file-save dialogs needed to write recovery data to USB. Fullscreen still fills the display; Save As / file pickers keep working.
 
@@ -11,17 +11,32 @@ The browser is **fullscreen, not kiosk**. Kiosk mode hides Chromium chrome and b
 >
 > **Version pin:** Use Alpine **3.24.1** (branch `v3.24`), the current stable as of 2026-06. Do **not** use `alpine:latest` (it drifts, often to edge) and do **not** use 3.20. v3.20 community support ended 2026-04-01. Chromium lives in *community*, so the RPi tarball, Docker image, and apk repos must all be the same branch.
 
-## Project goal
+## What the Pi actually needs
 
-Zero-trust RAM-only runtime. Small attack surface. USB still works so the user can save files.
+EntropyLab’s shippable artifact is **one self-contained HTML file**. The build (`scripts/build.mjs`) inlines CSS, JS, WASM, both header logos (SVG markup), and the favicon (PNG as base64 + SVG). It does **not** load `assets/`, CDNs, fonts.googleapis, or any other file at runtime.
 
-### Hardening
+**Copy only `entropylab.html` onto the image.** Do not copy `assets/`, `src/`, WASM crates, or `node_modules`. Those exist for the hosted site and for developers.
 
-1. **Firmware:** Wi-Fi and Bluetooth overlays disabled in `usercfg.txt`.
-2. **Kernel:** `ip=off ipv6.disable=1` plus `modprobe.blacklist=` for the Pi radio drivers. Modules live in the **modloop** (squashfs), not the apkovl, so deleting `ovl_root/lib/modules` does nothing. Blacklisting actually works. Rebuilding a custom modloop is the only way to physically remove them; that is not done here.
-3. **Privilege:** Chromium runs as uid 1000 (`entropylab`), not root, so the Chromium sandbox stays on.
-4. **Browser:** Incognito, no sync, no extensions. UI served from `httpd` on `127.0.0.1` (same-origin), not `file://`.
-5. **Compositor:** **labwc** (stacking wlroots), not cage. Cage is a single-client kiosk compositor and swallows extra toplevels — Chromium file dialogs would not work. labwc can show the save dialog over the app.
+PNG/SVG logos in `OogaBoogaX/entropylab/assets/` are for GitHub Pages / social cards. They are already baked into the HTML. Putting them next to the HTML on the Pi does nothing unless you change the app to use relative URLs like `assets/logo.svg` — in that case yes, keep the same relative path next to the HTML so busybox httpd can serve it. For the official build, skip them.
+
+Fonts: DejaVu is the system fallback. Chromium also ships its own UI fonts. No webfont packages.
+
+OS packages (top-level only; `apk fetch --recursive` pulls the rest):
+
+| Package | Why |
+|---|---|
+| `chromium` | The app. Pulls GTK, NSS, ICU, Wayland/Ozone deps. |
+| `mesa-dri-gallium` | Pi GPU. Without this Chromium is often a black screen. |
+| `labwc` | Stacking compositor so file-save dialogs work (cage cannot). |
+| `seatd` + `seatd-openrc` | Seat for labwc/Chromium. |
+| `dbus` + `dbus-openrc` | Chromium/GTK file dialogs. |
+| `eudev` + `eudev-openrc` | USB hotplug. |
+| `busybox-extras` | `httpd` on 127.0.0.1. |
+| `font-dejavu` | Fallback glyphs. |
+| `util-linux` | `blkid` for automount. |
+| `dosfstools` `exfatprogs` `ntfs-3g` | USB filesystems the user saves onto. |
+
+Not fetched: `alpine-base` / `openrc` (already in the alpine-rpi tarball), `wayland-protocols`, extra mesa bits, `gtk+3.0`, `icu-data-full` — those come in as chromium/labwc dependencies.
 
 ---
 
@@ -47,26 +62,26 @@ export PATH="/opt/homebrew/bin:$PATH"
 
 Open **OrbStack** and wait until the engine is Running before any `docker` step.
 
-### 2. Workspace and assets
+### 2. Workspace and the HTML artifact
 
 ```zsh
 mkdir -p ~/entropylab/{boot,cache,ovl_root,app_assets}
 cd ~/entropylab
-```
 
-> [!CAUTION]
-> Put the app at `~/entropylab/app_assets/entropylab.html` (rename if needed) before continuing.
-
-Pin the Alpine version used everywhere below:
-
-```zsh
 export ALPINE_VERSION=3.24.1
 export ALPINE_BRANCH=v3.24
+
+# Official self-contained app (logos/fonts/JS/WASM already inside this file).
+curl -fL -o app_assets/entropylab.html \
+  https://raw.githubusercontent.com/OogaBoogaX/entropylab/rock/entropylab.html
 ```
 
-### 3. Fetch packages (community repo + verify)
+Prefer a release asset you have SHA256-checked (`SHA256SUMS.txt` next to the file in that repo) over `raw.githubusercontent.com` if you are building for real funds.
 
-Chromium, labwc, and seatd are in **community**. Fetch from the same branch as the RPi image, then `apk verify` and build a local unsigned index so diskless boot can `apk add --no-network`.
+> [!CAUTION]
+> `app_assets/` should contain **only** `entropylab.html`. Do not dump the git tree or `assets/` in here.
+
+### 3. Fetch packages (community repo + verify)
 
 ```zsh
 docker run --rm -v "$(pwd)":/work -w /work --platform linux/arm64 alpine:${ALPINE_VERSION} sh -c "
@@ -78,21 +93,14 @@ docker run --rm -v "$(pwd)":/work -w /work --platform linux/arm64 alpine:${ALPIN
   apk update
   mkdir -p /work/cache
   apk fetch --recursive -o /work/cache --no-cache \
-    alpine-base \
     busybox-extras \
-    openrc \
     eudev eudev-openrc \
     dbus dbus-openrc \
     seatd seatd-openrc \
     labwc \
     chromium \
+    mesa-dri-gallium \
     font-dejavu \
-    mesa-dri-gallium mesa-egl mesa-gles mesa-gbm \
-    libdrm \
-    wayland wayland-protocols \
-    libinput libxkbcommon xkeyboard-config \
-    gtk+3.0 \
-    icu-data-full \
     util-linux \
     dosfstools exfatprogs ntfs-3g
   cd /work/cache
@@ -102,8 +110,6 @@ docker run --rm -v "$(pwd)":/work -w /work --platform linux/arm64 alpine:${ALPIN
   du -sh .
 "
 ```
-
-If `apk fetch` errors on a package name, drop that one line and re-run; recursive deps from chromium/labwc/mesa cover most of GPU + Wayland.
 
 ### 4. Overlay (apkovl)
 
@@ -176,7 +182,6 @@ LABEL=$(printf '%s' "$LABEL" | tr -c 'A-Za-z0-9._-' '_')
 if [ "$BUS" = "mmc" ]; then
     MNT_DIR=/mnt/sdcard
 else
-    # Treat unknown buses with a USB-style path so extra SD readers still work.
     MNT_DIR="/mnt/usb_$LABEL"
 fi
 
@@ -205,11 +210,11 @@ chmod +x ovl_root/usr/local/bin/auto-mount.sh
 
 #### 4.3 Install cached packages on first boot
 
+World lists only the top-level set. Recursive `.apk` files in `cache/` still get installed because the local.d script adds every file in that directory.
+
 ```zsh
 cat << 'EOF' > ovl_root/etc/apk/world
-alpine-base
 busybox-extras
-openrc
 eudev
 eudev-openrc
 dbus
@@ -218,19 +223,8 @@ seatd
 seatd-openrc
 labwc
 chromium
-font-dejavu
 mesa-dri-gallium
-mesa-egl
-mesa-gles
-mesa-gbm
-libdrm
-wayland
-wayland-protocols
-libinput
-libxkbcommon
-xkeyboard-config
-gtk+3.0
-icu-data-full
+font-dejavu
 util-linux
 dosfstools
 exfatprogs
@@ -239,7 +233,6 @@ EOF
 
 cat << 'EOF' > ovl_root/etc/local.d/00-apk-from-cache.start
 #!/bin/sh
-# Diskless: install the pre-fetched .apk set from the boot media cache.
 CACHE=""
 for d in /media/*/cache /cache; do
     if [ -d "$d" ] && ls "$d"/*.apk >/dev/null 2>&1; then
@@ -268,6 +261,7 @@ chmod +x ovl_root/etc/local.d/00-apk-from-cache.start
 mkdir -p ovl_root/var/www/entropylab
 cp -R app_assets/. ovl_root/var/www/entropylab/
 chmod -R 755 ovl_root/var/www/entropylab
+# Expected: ovl_root/var/www/entropylab/entropylab.html only.
 
 cat << 'EOF' > ovl_root/home/entropylab/.config/labwc/autostart
 chromium-browser \
@@ -318,7 +312,6 @@ start_pre() {
 
 start() {
     ebegin "Starting EntropyLab (labwc + Chromium fullscreen)"
-    # busybox-extras httpd; bind loopback only; drop to nobody after bind
     httpd -p 127.0.0.1:8080 -h /var/www/entropylab -u nobody:nobody
 
     export XDG_RUNTIME_DIR=/tmp/runtime-entropylab
@@ -389,13 +382,12 @@ dtoverlay=disable-bt
 gpu_mem=128
 EOF
 
-# ip=off stops the kernel from bringing up a network. Blacklist stops the Pi radio modules in the modloop.
 gsed -i 's/$/ ip=off ipv6.disable=1 modprobe.blacklist=brcmfmac,brcmutil,hci_uart,btbcm,bluetooth,cfg80211,rfkill/' boot/cmdline.txt
 ```
 
 ### 6. Distribution
 
-Chromium + Mesa + Wayland is hundreds of MB of `.apk` files. A 256 MB image cannot hold them. Size the FAT image from actual contents plus 25% headroom, minimum 2048 MB.
+Chromium + Mesa + Wayland is hundreds of MB of `.apk` files. Size the FAT image from actual contents plus 25% headroom, minimum 2048 MB.
 
 **Option A: flash microSD / USB**
 
@@ -437,6 +429,7 @@ Flash the `.img` with Raspberry Pi Imager or `dd`. First boot installs packages 
 ```sh
 apk policy chromium labwc
 command -v chromium-browser
+ls /var/www/entropylab
 ls /mnt
 cat /proc/cmdline
 lsmod | grep -E 'brcmfmac|bluetooth' || echo "radio modules not loaded"
