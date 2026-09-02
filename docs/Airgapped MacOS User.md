@@ -1,3 +1,4 @@
+```markdown
 # 🛡️ Hardened macOS Kiosk User Guide
 
 **Secure, Low-Persistence Runtime Environment for Apple Silicon**
@@ -11,7 +12,7 @@ To create a "disposable" user session where:
 2. **Zero Browser Persistence:** Chromium data is stored in a true RAM disk and wiped upon reboot.
 3. **Reduced Footprint:** System features (Spotlight, Dock recents, Desktop icons) are disabled.
 4. **Privilege Limitation:** The user is a "Standard User," preventing system-wide modifications.
-5. **Easy Exit:** A "Self-Destruct" button allows the user to wipe the environment and reset system power settings instantly.
+5. **Easy Exit:** A "Self-Destruct" button on the Dock allows the user to wipe the environment, reset system power settings instantly, and forcefully reboot.
 
 ---
 
@@ -72,7 +73,8 @@ sudo tee /usr/local/bin/create_ramdisk.sh << 'EOF'
 #!/bin/zsh
 # Create a 256MB RAM Disk (524288 blocks)
 RAM_DISK_SIZE=524288 
-diskutil create "disk${RAM_DISK_SIZE}" 0 HFS+ "RAMDISK" $RAM_DISK_SIZE
+RAM_DEV=$(hdiutil attach -nomount ram://$RAM_DISK_SIZE)
+diskutil erasevolume HFS+ "RAMDISK" $RAM_DEV
 mkdir -p /Volumes/RAMDISK/chrome
 chmod 777 /Volumes/RAMDISK/chrome
 EOF
@@ -82,7 +84,7 @@ sudo chmod +x /usr/local/bin/create_ramdisk.sh
 # Create the LaunchDaemon to run this at boot
 sudo tee /Library/LaunchDaemons/com.entropylab.ramdisk.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "[http://www.apple.com/DTDs/PropertyList-1.0.dtd](http://www.apple.com/DTDs/PropertyList-1.0.dtd)">
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -121,7 +123,7 @@ open -a "Google Chrome" --args \
     --disable-software-rasterizer \
     --disable-dev-shm-usage \
     --user-data-dir=/Volumes/RAMDISK/chrome \
-    "http://127.0.0.1:8080/entropylab.html"
+    "[http://127.0.0.1:8080/entropylab.html](http://127.0.0.1:8080/entropylab.html)"
 EOF
 
 sudo chmod +x /Users/entropylab/bin/launch_browser.sh
@@ -132,9 +134,13 @@ sudo chown -R entropylab:staff /Users/entropylab/bin
 This creates a `launchd` agent that triggers the browser script immediately upon login.
 
 ```zsh
+# Create the LaunchAgents directory first to avoid missing directory errors
+sudo mkdir -p /Users/entropylab/Library/LaunchAgents
+sudo chown -R entropylab:staff /Users/entropylab/Library
+
 sudo tee /Users/entropylab/Library/LaunchAgents/com.entropylab.browser.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "[http://www.apple.com/DTDs/PropertyList-1.0.dtd](http://www.apple.com/DTDs/PropertyList-1.0.dtd)">
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -153,7 +159,7 @@ sudo chown entropylab:staff /Users/entropylab/Library/LaunchAgents/com.entropyla
 ```
 
 ### 6. The "Self-Destruct" Mechanism
-To allow the restricted user to wipe the environment and reset the system without needing an admin password, we implement a privileged cleanup script.
+To allow the restricted user to wipe the environment and reset the system without needing an admin password, we implement a privileged cleanup script. Because the desktop environment is disabled, we pin this script directly to the user's Dock.
 
 ```zsh
 # 1. Create the root-level cleanup script
@@ -175,6 +181,9 @@ fi
 
 # Delete the entropylab user (Force logout and wipe)
 sudo sysadminctl -deleteUser entropylab
+
+# Reboot the machine immediately to clear RAM and complete destruction
+sudo shutdown -r now
 EOF
 
 sudo chmod +x /usr/local/bin/cleanup_entropylab.sh
@@ -182,14 +191,17 @@ sudo chmod +x /usr/local/bin/cleanup_entropylab.sh
 # 2. Grant the entropylab user passwordless sudo rights ONLY for this script
 echo "entropylab ALL=(ALL) NOPASSWD: /usr/local/bin/cleanup_entropylab.sh" | sudo tee /etc/sudoers.d/entropylab_cleanup
 
-# 3. Create the double-clickable .command shortcut on the user's desktop
-sudo tee /Users/entropylab/Desktop/Self-Destruct.command << 'EOF'
+# 3. Create the double-clickable .command shortcut in the user's home folder
+sudo tee /Users/entropylab/Self-Destruct.command << 'EOF'
 #!/bin/zsh
 sudo /usr/local/bin/cleanup_entropylab.sh
 EOF
 
-sudo chmod +x /Users/entropylab/Desktop/Self-Destruct.command
-sudo chown entropylab:staff /Users/entropylab/Desktop/Self-Destruct.command
+sudo chmod +x /Users/entropylab/Self-Destruct.command
+sudo chown entropylab:staff /Users/entropylab/Self-Destruct.command
+
+# 4. Pin the Self-Destruct command to the Dock for visibility
+sudo -u entropylab defaults write com.apple.dock persistent-others -array-add "<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>file:///Users/entropylab/Self-Destruct.command</string><key>_CFURLStringType</key><integer>15</integer></dict></dict><key>tile-type</key><string>file-tile</string></dict>"
 ```
 
 ---
@@ -197,7 +209,7 @@ sudo chown entropylab:staff /Users/entropylab/Desktop/Self-Destruct.command
 ## 📝 Final Operational Notes
 
 ### 🔑 USB Access
-The user has full access to USB drives. However, the first time the browser attempts to access a USB drive, macOS will show a **TCC (Transparency, Consent, and Control)** popup. 
+The user has full access to USB drives. However, the first time the browser attempts to access a USB drive, macOS will show a **TCC (Transparency, Consent, and Control)** popup.
 - **Action:** Log in as `entropylab` once, perform a USB action, and click **"Allow."** This permission is permanent for that user.
 
 ### 🧹 Data Persistence Summary
@@ -216,4 +228,6 @@ sudo rm /Library/LaunchDaemons/com.entropylab.ramdisk.plist
 sudo rm /usr/local/bin/create_ramdisk.sh
 sudo rm /etc/sudoers.d/entropylab_cleanup
 sudo pmset -a sleep 10 disablesleep 0 hibernatemode 3
+```
+
 ```
