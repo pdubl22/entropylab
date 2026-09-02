@@ -59,17 +59,19 @@ To ensure the browser is truly "RAM-only," we create a launch script that redire
 
 ```zsh
 # Create a local bin directory for the user
-sudo mkdir -p /Users/entropylab/bin
-sudo chown entropylab:staff /Users/entropylab/bin
-
-# Create the launch script
 sudo tee /Users/entropylab/bin/launch_browser.sh << 'EOF'
 #!/bin/zsh
-# Clear existing chrome tmp data to ensure a fresh session
-rm -rf /tmp/chrome
 
-# Launch Chromium/Chrome with hardening flags
-# --user-data-dir=/tmp/chrome is the key to zero persistence
+# 1. Create a 256MB RAM Disk
+# This creates a disk in memory that is completely wiped on reboot.
+RAM_DISK_SIZE=524288 
+DISK_ID=$(diskutil create "disk${RAM_DISK_SIZE}" 0 HFS+ "RAMDISK" $RAM_DISK_SIZE | grep "disk" | awk '{print $1}')
+
+# 2. Create the Chrome profile directory on the RAM disk
+mkdir -p /Volumes/RAMDISK/chrome
+
+# 3. Launch Chromium/Chrome
+# We point --user-data-dir to the RAM disk instead of /tmp
 open -a "Google Chrome" --args \
     --incognito \
     --no-first-run \
@@ -77,8 +79,10 @@ open -a "Google Chrome" --args \
     --disable-extensions \
     --disable-component-update \
     --disable-notifications \
-    --user-data-dir=/tmp/chrome \
+    --user-data-dir=/Volumes/RAMDISK/chrome \
     "http://127.0.0.1:8080/entropylab.html"
+
+# Note: The RAM disk stays mounted until reboot.
 EOF
 
 # Set permissions
