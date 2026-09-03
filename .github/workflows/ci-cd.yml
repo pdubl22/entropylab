@@ -67,6 +67,8 @@ jobs:
         run: npm run build
       - name: Generate the SHA-256 checksum manifest
         run: sha256sum entropylab.html > SHA256SUMS.txt
+      - name: Generate the IPFS CID name
+        run: node scripts/cid.mjs entropylab.html > CID.txt
       - name: Attest the wallet artifact
         if: github.ref == 'refs/heads/rock' && github.event_name == 'push'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -76,7 +78,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: entropylab-sha256sums
-          path: SHA256SUMS.txt
+          path: |
+            SHA256SUMS.txt
+            CID.txt
           retention-days: 7
       - name: Record the candidate digest
         id: digest
@@ -425,11 +429,13 @@ jobs:
         run: echo "${{ needs.build.outputs.sha256 }}  entropylab.html" | sha256sum -c -
       - name: Generate the SHA-256 checksum manifest
         run: sha256sum entropylab.html > SHA256SUMS.txt
+      - name: Generate the IPFS CID name
+        run: node scripts/cid.mjs entropylab.html > CID.txt
       - name: Commit the generated artifact
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f entropylab.html src/js/entropylab-wasm-b64.js src/js/psbt-wasm-b64.js SHA256SUMS.txt
+          git add -f entropylab.html src/js/entropylab-wasm-b64.js src/js/psbt-wasm-b64.js SHA256SUMS.txt CID.txt
           if git diff --cached --quiet; then
             echo "Build output is unchanged; nothing to commit."
             exit 0
