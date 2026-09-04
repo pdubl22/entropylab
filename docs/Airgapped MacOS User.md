@@ -12,6 +12,8 @@ The browser is **fullscreen, not kiosk**, so Save As to USB works.
 > Install **Chromium or Google Chrome** from a verified .dmg **before** you pull the network. This guide does not download a browser.
 >
 > `pmset` and the RAM-disk LaunchDaemon are **machine-wide**. Use Self-Destruct (or the manual cleanup) when you want the Mac back to normal sleep.
+>
+> Run the script with **zsh**, not bash: `zsh "Airgapped MacOS User.sh"`
 
 ## Automated script
 
@@ -37,20 +39,43 @@ Run the generated script from an admin account that already has a Secure Token.
 ## 1. Copy the app and create the user
 
 ```zsh extract
+# Fresh Apple Silicon installs often lack /usr/local/bin
+sudo mkdir -p /usr/local/bin
+
 # Self-contained artifact. Prefer a release + SHA256SUMS.txt for real funds.
 curl -fL -o /tmp/entropylab.html \
   https://raw.githubusercontent.com/OogaBoogaX/entropylab/rock/entropylab.html
 
 # Prompt for the kiosk password instead of baking one into history.
+# Nothing will echo while you type — that is normal.
 echo "Password for the new standard user 'entropylab':"
 read -s EL_PASS
 echo
+
+if [ -z "${EL_PASS}" ]; then
+  echo "error: empty password — re-run and type a password, then press Enter" >&2
+  exit 1
+fi
+
+# Remove a half-created user from a previous failed run (ignore errors)
+sudo sysadminctl -deleteUser entropylab -secure 2>/dev/null || true
+sudo rm -rf /Users/entropylab 2>/dev/null || true
 
 sudo sysadminctl -addUser entropylab \
   -fullName "EntropyLab" \
   -password "$EL_PASS" \
   -home /Users/entropylab \
   -shell /bin/zsh
+
+# sysadminctl may print an FDE warning even when -password was set; that can be ignored
+# if the next lines succeed. Ensure the home directory really exists.
+if [ ! -d /Users/entropylab ]; then
+  sudo createhomedir -c -u entropylab
+fi
+if [ ! -d /Users/entropylab ]; then
+  echo "error: /Users/entropylab was not created" >&2
+  exit 1
+fi
 
 unset EL_PASS
 
@@ -63,6 +88,8 @@ sudo chflags uchg /Users/entropylab/entropylab.html
 ```
 
 `sysadminctl -addUser` (run by a Secure Token admin, with `-password`) is the supported way to bootstrap a token for the new user on Apple Silicon. Do not use `dscl` for this.
+
+If `sysadminctl` prints `No clear text password or interactive option was specified`, check that you actually typed a password at the prompt (it does not echo). The script now aborts on an empty password. A successful run still creates `/Users/entropylab` (via `createhomedir` if needed).
 
 ## 2. Skip first-run and quiet the UI
 
@@ -96,6 +123,8 @@ Leave Wi-Fi/Bluetooth off from the menu bar (or `networksetup -setairportpower e
 256 MB is too small for a Chrome profile. Default is **1 GiB**. `ram://` units are 512-byte sectors (`MB * 2048`).
 
 ```zsh extract
+sudo mkdir -p /usr/local/bin
+
 sudo tee /usr/local/bin/create_ramdisk.sh << 'EOF'
 #!/bin/zsh
 set -euo pipefail
@@ -235,6 +264,8 @@ sudo chmod 644 /Users/entropylab/Library/LaunchAgents/com.entropylab.browser.pli
 The `.command` file is the only thing `entropylab` may run as root. The script is root-owned and not writable by that user. The script **itself** runs as root, so it must **not** call `sudo` again (the kiosk user has no general sudo).
 
 ```zsh extract
+sudo mkdir -p /usr/local/bin
+
 sudo tee /usr/local/bin/cleanup_entropylab.sh << 'EOF'
 #!/bin/zsh
 set -eu
@@ -306,6 +337,7 @@ sudo rm -f /usr/local/bin/create_ramdisk.sh /usr/local/bin/cleanup_entropylab.sh
 sudo rm -f /etc/sudoers.d/entropylab_cleanup
 sudo chflags nouchg /Users/entropylab/entropylab.html 2>/dev/null || true
 sudo sysadminctl -deleteUser entropylab -secure
+sudo rm -rf /Users/entropylab 2>/dev/null || true
 sudo pmset -a sleep 10 disablesleep 0 hibernatemode 3
 if mount | grep -q ' /Volumes/RAMDISK '; then diskutil eject /Volumes/RAMDISK; fi
 ```
