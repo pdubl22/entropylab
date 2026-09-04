@@ -8,20 +8,43 @@
 # Install Chromium or Google Chrome from a verified .dmg BEFORE going offline.
 set -euo pipefail
 
+# Fresh Apple Silicon installs often lack /usr/local/bin
+sudo mkdir -p /usr/local/bin
+
 # Self-contained artifact. Prefer a release + SHA256SUMS.txt for real funds.
 curl -fL -o /tmp/entropylab.html \
   https://raw.githubusercontent.com/OogaBoogaX/entropylab/rock/entropylab.html
 
 # Prompt for the kiosk password instead of baking one into history.
+# Nothing will echo while you type — that is normal.
 echo "Password for the new standard user 'entropylab':"
 read -s EL_PASS
 echo
+
+if [ -z "${EL_PASS}" ]; then
+  echo "error: empty password — re-run and type a password, then press Enter" >&2
+  exit 1
+fi
+
+# Remove a half-created user from a previous failed run (ignore errors)
+sudo sysadminctl -deleteUser entropylab -secure 2>/dev/null || true
+sudo rm -rf /Users/entropylab 2>/dev/null || true
 
 sudo sysadminctl -addUser entropylab \
   -fullName "EntropyLab" \
   -password "$EL_PASS" \
   -home /Users/entropylab \
   -shell /bin/zsh
+
+# sysadminctl may print an FDE warning even when -password was set; that can be ignored
+# if the next lines succeed. Ensure the home directory really exists.
+if [ ! -d /Users/entropylab ]; then
+  sudo createhomedir -c -u entropylab
+fi
+if [ ! -d /Users/entropylab ]; then
+  echo "error: /Users/entropylab was not created" >&2
+  exit 1
+fi
 
 unset EL_PASS
 
@@ -52,6 +75,8 @@ sudo -u "$U" defaults write com.apple.finder CreateDesktop -bool false
 sudo pmset -a sleep 0 disablesleep 1 hibernatemode 0
 sudo -u "$U" defaults write com.apple.screensaver idleTime -int 0
 
+
+sudo mkdir -p /usr/local/bin
 
 sudo tee /usr/local/bin/create_ramdisk.sh << 'EOF'
 #!/bin/zsh
@@ -174,6 +199,8 @@ EOF
 sudo chown -R entropylab:staff /Users/entropylab/Library
 sudo chmod 644 /Users/entropylab/Library/LaunchAgents/com.entropylab.browser.plist
 
+
+sudo mkdir -p /usr/local/bin
 
 sudo tee /usr/local/bin/cleanup_entropylab.sh << 'EOF'
 #!/bin/zsh
