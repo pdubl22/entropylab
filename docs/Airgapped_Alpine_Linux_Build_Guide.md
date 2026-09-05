@@ -260,6 +260,10 @@ depend() {
 }
 
 start_pre() {
+# Ensure hardware groups exist before assigning the user to them
+  addgroup -S video 2>/dev/null || true
+  addgroup -S input 2>/dev/null || true
+
   if ! id -u entropylab >/dev/null 2>&1; then
     adduser -D -u 1000 -G video,input -s /bin/ash entropylab
   fi
