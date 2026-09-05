@@ -217,7 +217,9 @@ cat << 'EOF' > ovl_root/etc/local.d/00-install-cache.start
 
 echo "Looking for offline package cache..."
 
-for d in /media/*/cache /media/mmcblk0p1/cache /media/sda1/cache /media/sdb1/cache; do
+# Alpine diskless mounts boot media at /media/
+# Try all common mount points where the cache/ folder might be
+for d in /media/*/cache /media/mmcblk0p1/cache /media/sda1/cache /media/sdb1/cache /mnt/*/cache; do
   if [ -d "$d" ] && ls "$d"/*.apk >/dev/null 2>&1; then
     echo "Found package cache at $d — installing..."
     apk add --allow-untrusted --force-non-repository "$d"/*.apk
@@ -226,7 +228,20 @@ for d in /media/*/cache /media/mmcblk0p1/cache /media/sda1/cache /media/sdb1/cac
   fi
 done
 
+# If still not found, scan all mounted filesystems
+echo "Cache not found in standard paths. Scanning all mounts..."
+for mp in $(mount | grep -o '/media/[^ ]*' | sort -u); do
+  if [ -d "$mp/cache" ] && ls "$mp/cache"/*.apk >/dev/null 2>&1; then
+    echo "Found package cache at $mp/cache — installing..."
+    apk add --allow-untrusted --force-non-repository "$mp/cache"/*.apk
+    echo "Package installation finished."
+    exit 0
+  fi
+done
+
 echo "WARNING: No package cache found. httpd / cage / chromium will be missing."
+echo "         Mounted filesystems:"
+mount | grep /media
 exit 1
 EOF
 chmod +x ovl_root/etc/local.d/00-install-cache.start
@@ -416,7 +431,7 @@ diskutil list
 ```
 
 Look at the output. Identify your microSD / USB stick (example: `disk4` or `disk5`).  
-**Never** choose `disk0` or `disk1` (those are your Mac’s internal drives).
+**Never** choose `disk0` or `disk1` (those are your Mac's internal drives).
 
 **Block 2 – set the target disk (edit the number)**
 ```zsh
@@ -507,7 +522,7 @@ fi
 ## Quick checklist before you boot the Pi
 
 - [ ] `app_assets/entropylab.html` was present when you ran the build
-- [ ] You saw the messages “✅ Overlay packaged” and “✅ Done” / “✅ Image created”
+- [ ] You saw the messages "✅ Overlay packaged" and "✅ Done" / "✅ Image created"
 - [ ] The microSD / USB is safely ejected
 - [ ] Pi has at least 2 GB RAM
 - [ ] No network cable is attached (optional but recommended for the air-gapped use case)
@@ -517,7 +532,7 @@ Insert the card, power on the Pi, and EntropyLab should start automatically in f
 ### Expected boot behaviour (after this fix)
 
 1. OpenRC starts.
-2. `local` service runs → `00-install-cache.start` installs all packages from the card’s `cache/` folder.
+2. `local` service runs → `00-install-cache.start` installs all packages from the card's `cache/` folder.
 3. `entropylab` service starts → `httpd` serves the HTML, `cage` launches Chromium in kiosk mode.
 4. You should see EntropyLab full-screen (no login prompt).
 
