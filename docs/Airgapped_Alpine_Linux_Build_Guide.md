@@ -1,587 +1,579 @@
-# 🛡️ Airgapped Alpine Linux Build Guide
+# Airgapped Alpine Linux Build Guide
 
-**Hardened RAM-Only OS for Raspberry Pi 4/5**
+**RAM-only Alpine for Raspberry Pi 4 / 5 — built entirely on macOS**
 
-This guide creates a bootable microSD / USB (or a distributable `.img`) that boots Alpine Linux into RAM and launches only the EntropyLab web app in a hardened Chromium window.
+This guide produces a FAT32 SD card that boots Alpine Linux into RAM and lands on a minimal desktop as user `entropylab`, with Chromium already installed. The Pi never brings up Ethernet, Wi-Fi, or Bluetooth. You drop `entropylab.html` onto the card on your Mac **just before ejecting**.
 
-Optimized for **Apple Silicon Macs** (M1/M2/M3/M4).
+Optimized for **Apple Silicon Macs** (M1–M4) running **macOS Tahoe**, using **OrbStack** (or Docker Desktop).
 
-> [!CAUTION]
-> **Hardware Requirement:** Raspberry Pi 4 or 5 with **at least 2 GB of RAM**. The entire OS and packages load into a RAM disk. 1 GB models will usually run out of memory and fail to boot.
-
----
-
-## 🎯 What this build does
-
-1. Boots Alpine fully into RAM (diskless).
-2. Disables Wi-Fi and Bluetooth at firmware level.
-3. Removes network / wireless / Bluetooth drivers **and** their firmware from the kernel modloop.
-4. Turns off the kernel IP stack (`ip=off`).
-5. Runs Chromium as an unprivileged user with strong browser hardening flags.
-6. Serves `entropylab.html` from a local read-only web server (no `file://` privileges).
+> **Hardware:** Raspberry Pi 4 or 5 with **4 GB RAM or more**. The whole OS plus Chromium lives in RAM. 2 GB models will likely fail or thrash.
 
 ---
 
-## 🛠️ Build Instructions (macOS)
+## What this build is (and is not)
 
-### Before you start
+| Item | Choice |
+| --- | --- |
+| Alpine | `latest-stable`, aarch64 |
+| Mode | Diskless — entire root filesystem in tmpfs (RAM) |
+| Display | Xorg + Openbox desktop (panel, file manager, terminal) |
+| Browser | Chromium, started normally from the desktop menu (not kiosk) |
+| HTML | Pure `file://` from a `html/` folder you add on the Mac |
+| User | `entropylab`, auto-login, password `entropylab` |
+| Network on the Pi | Never started. Wi-Fi and Bluetooth disabled in firmware |
+| Persistence | None. Normal power-off is enough |
+| Output | Folder of files copied onto a FAT32 SD card |
 
-1. Have your finished `entropylab.html` file ready.
-2. Have a microSD card or USB stick you are willing to erase (Option A), **or** just generate an `.img` file (Option B).
+**Left out on purpose:** SSH, Wi-Fi tools, Bluetooth, NTP, extra editors, local web server, kiosk/fullscreen mode, offline package re-install after the first build.
+
+### How boot actually works (read this once)
+
+Alpine **diskless** still “installs” packages **every boot**. That is not a setup session and it is **not** using the network.
+
+1. Pi firmware reads the FAT32 card (kernel, initramfs, firmware).
+2. Initramfs creates a tmpfs root in RAM.
+3. A boot script installs the `.apk` files from `cache/` **on the card** into that RAM disk.
+4. The pre-built overlay (`entropylab.apkovl.tar.gz`) is applied (user, auto-login, X, Chromium flags).
+5. Auto-login as `entropylab` → `startx` → Openbox desktop.
+6. `html/` is copied into `/tmp/html` (RAM). The boot partition is remounted **read-only**.
+7. You open Chromium and load `file:///tmp/html/entropylab.html`.
+8. Power off. RAM is gone. The card still only has what you copied onto it.
+
+Every boot can take **1–2 minutes** while Chromium unpacks into RAM. That is normal.
+
+The Pi clock will be wrong (no battery RTC, no NTP). Local HTML / BIP39 does not need correct time.
 
 ---
 
-### 1. Create a working folder and open Terminal there
+## Requirements
 
-You can put the build folder anywhere you like (Desktop, Documents, external drive, etc.).
+**Mac**
 
-**Recommended way (macOS Finder):**
+- Apple Silicon Mac, macOS Tahoe
+- OrbStack (preferred) or Docker Desktop
+- ~3 GB free disk for the build
+- An SD card you are willing to erase (8 GB+, 16 GB is comfortable)
 
-1. Create a new folder, for example `EntropyLab-Build`.
-2. Right-click the folder → **New Terminal at Folder**  
-   (or open Terminal and drag the folder onto the Terminal icon).
+**Pi**
 
-All commands below assume you are already inside that folder.
+- Raspberry Pi 4 or 5 (aarch64)
+- 4 GB+ RAM
+- HDMI display, USB keyboard, USB mouse
+- **No Ethernet cable**
 
-**Tip:** Avoid spaces in the folder path if possible (e.g. prefer `EntropyLab-Build` over `Entropy Lab Build`). The commands quote paths correctly, but paths without spaces are simpler.
+**You supply last**
+
+- `entropylab.html` (copied into `html/` on the card just before you take it to the Pi)
 
 ---
 
-### 2. System Bootstrap (one-time tools)
+## 1. Create a working folder
 
-This installs Homebrew (if needed), OrbStack (lightweight Docker), and GNU tools.
+Create a folder without spaces, for example `EntropyLab-Build`.
 
-> **Password note:** The Homebrew install will ask for your **macOS User Administrator Password**.
+Right-click it → **New Terminal at Folder** (or `cd` into it).
+
+All commands below assume you are already in that folder.
+
+---
+
+## 2. One-time Mac bootstrap
+
+> Homebrew / OrbStack may ask for your **macOS admin password**.
 
 ```zsh
 # Must be Apple Silicon
 if [ "$(uname -m)" != "arm64" ]; then
-  echo "❌ This workflow requires an Apple Silicon Mac."
+  echo "This workflow requires an Apple Silicon Mac."
   exit 1
 fi
 
-# Soft warning if the current path contains spaces
 if [[ "$PWD" == *" "* ]]; then
-  echo "⚠️  Warning: Your build folder path contains spaces."
-  echo "   This usually works, but a path without spaces is simpler."
+  echo "Warning: this folder path contains spaces. A path without spaces is simpler."
 fi
 
-# Install Homebrew if missing
 if ! command -v brew >/dev/null 2>&1; then
-  /bin/bash -c "$(curl -fsSL [https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh](https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh))"
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 fi
 
 export PATH="/opt/homebrew/bin:$PATH"
 
 brew update
-echo "Installing OrbStack and GNU tools..."
 brew install --cask orbstack
 brew install coreutils gnu-sed
 
-echo "✅ System Bootstrap complete."
-
+echo "Bootstrap complete."
 ```
+
+Open **OrbStack** from Applications once so the Docker engine starts.
+
+Check:
+
+```zsh
+docker version
+docker run --rm --platform linux/arm64 alpine:latest uname -m
+```
+
+You want `aarch64`.
 
 ---
 
-### 3. Create folders and place your HTML file
+## 3. Create folders
 
 ```zsh
-mkdir -p boot cache ovl_root app_assets
-
+mkdir -p boot cache ovl_root html
 ```
 
-**Important – put your app here now:**
-
-1. Rename your main HTML file to exactly `entropylab.html`.
-2. Copy or move it into the `app_assets` folder that was just created.
-
-The finished path must be:
-
-```text
-./app_assets/entropylab.html
-
-```
-
-**Safety check** (stops with a clear message if the file is missing):
-
-```zsh
-if [ ! -f app_assets/entropylab.html ]; then
-  echo "❌ Missing required file: app_assets/entropylab.html"
-  echo "   Rename your HTML file to entropylab.html and place it in the app_assets folder, then re-run this check."
-  exit 1
-fi
-echo "✅ entropylab.html found."
-
-```
+Do **not** put the HTML in yet. That happens on the SD card, last.
 
 ---
 
-### 4. Start OrbStack and download packages
+## 4. Download packages into `cache/` (Mac uses the network; the Pi will not)
 
 ```zsh
 if ! command -v docker >/dev/null 2>&1; then
-  echo "❌ Docker command not found. OrbStack may not be installed correctly."
-  echo "   Try opening OrbStack from Applications, then re-run this step."
+  echo "Docker not found. Open OrbStack, then re-run this step."
   exit 1
 fi
 
-echo "🐳 Launching OrbStack..."
-open -a OrbStack 2>/dev/null || {
-  echo "⚠️  Could not auto-launch OrbStack. Checking if Docker is already running..."
-}
+open -a OrbStack 2>/dev/null || true
 
 RETRY=0
-MAX_RETRY=30
 until docker info >/dev/null 2>&1; do
-  if [ $RETRY -ge$MAX_RETRY ]; then
-    echo "❌ Docker engine did not become ready after 30 seconds."
-    echo "   Open OrbStack manually from Applications and run this step again."
+  if [ "$RETRY" -ge 30 ]; then
+    echo "Docker engine did not become ready. Open OrbStack and try again."
     exit 1
   fi
-  echo "⏳ Waiting for Docker... ($((RETRY+1))/$MAX_RETRY)"
+  echo "Waiting for Docker... ($((RETRY+1))/30)"
   sleep 1
   RETRY=$((RETRY + 1))
 done
-echo "✅ Docker engine is ready."
 
-docker run --rm -v "$(pwd):/work" -w /work --platform linux/arm64 alpine:latest sh -c "
-  apk update && \
+docker run --rm -v "$(pwd):/work" -w /work --platform linux/arm64 alpine:latest sh -c '
+  echo "https://dl-cdn.alpinelinux.org/alpine/latest-stable/main" > /etc/apk/repositories
+  echo "https://dl-cdn.alpinelinux.org/alpine/latest-stable/community" >> /etc/apk/repositories
+  apk update
   apk fetch --recursive -o /work/cache \
-    alpine-base \
-    busybox-extras \
-    cage \
-    chromium \
+    eudev eudev-openrc \
+    dbus dbus-openrc \
+    agetty shadow \
+    xorg-server xinit xset xsetroot \
+    xf86-input-libinput \
+    xf86-video-fbdev \
+    xf86-video-modesetting \
+    mesa-dri-gallium mesa-egl mesa-gl \
+    setxkbmap \
     font-dejavu \
-    mesa-dri-gallium \
-    wayland-protocols \
-    eudev \
-    eudev-openrc
-"
+    hicolor-icon-theme \
+    openbox \
+    tint2 \
+    pcmanfm \
+    xterm \
+    chromium
+'
 
+echo "Cache packages:"
+ls cache | wc -l
 ```
+
+You should see a large number of `.apk` files (Chromium pulls in a lot of dependencies). That is expected.
 
 ---
 
-### 5. Build the hardened overlay (apkovl)
+## 5. Build the overlay (apkovl)
 
-#### 5.1 Basic structure
-
-```zsh
-mkdir -p ovl_root/home/entropylab
-
-```
-
-#### 5.2 Auto-mount script for extra USB / SD cards
+This overlay is applied on every boot. It does **not** contain `entropylab.html`.
 
 ```zsh
-mkdir -p ovl_root/etc/udev/rules.d
-cat << 'EOF' > ovl_root/etc/udev/rules.d/99-automount.rules
-ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", RUN+="/usr/local/bin/auto-mount.sh %N"
+# --- hostname, no networking ---
+mkdir -p ovl_root/etc/network ovl_root/etc/runlevels/sysinit ovl_root/etc/runlevels/default
+
+echo "entropylab" > ovl_root/etc/hostname
+
+cat > ovl_root/etc/network/interfaces << 'EOF'
+auto lo
+iface lo inet loopback
 EOF
 
-mkdir -p ovl_root/usr/local/bin
-cat << 'EOF' > ovl_root/usr/local/bin/auto-mount.sh
-#!/bin/sh
-DEVNAME=$1
+# --- OpenRC: udev + dbus + local.d; no networking ---
+ln -sf /etc/init.d/udev         ovl_root/etc/runlevels/sysinit/udev
+ln -sf /etc/init.d/udev-trigger ovl_root/etc/runlevels/sysinit/udev-trigger
+ln -sf /etc/init.d/dbus         ovl_root/etc/runlevels/default/dbus
+ln -sf /etc/init.d/local        ovl_root/etc/runlevels/default/local
 
-BUS=$(udevadm info --query=property --name="$DEVNAME" | grep "ID_BUS=" | cut -d'=' -f2)
-
-# Skip if already mounted (boot device)
-if mount | grep -q "$DEVNAME"; then
-  exit 0
-fi
-
-if [ "$BUS" = "mmc" ]; then
-  mkdir -p /mnt/sdcard
-  mount -o uid=1000,gid=1000,umask=000 "$DEVNAME" /mnt/sdcard
-elif [ "$BUS" = "usb" ]; then
-  LABEL=$(blkid -s LABEL -o value "$DEVNAME")
-  if [ -z "$LABEL" ]; then
-    LABEL=$(basename "$DEVNAME")
-  fi
-  MNT_DIR="/mnt/usb_$LABEL"
-  mkdir -p "$MNT_DIR"
-  mount -o uid=1000,gid=1000,umask=000 "$DEVNAME" "$MNT_DIR"
-fi
-EOF
-chmod +x ovl_root/usr/local/bin/auto-mount.sh
-
-```
-
-#### 5.3 Early local.d script to install cache packages
-
-```zsh
+# --- install cache packages into RAM, then copy HTML, then remount boot read-only ---
 mkdir -p ovl_root/etc/local.d
-cat << 'EOF' > ovl_root/etc/local.d/00-install-cache.start
+
+cat > ovl_root/etc/local.d/00-install-cache.start << 'EOF'
 #!/bin/sh
-echo "Installing packages from boot media cache..."
-
-# Try multiple possible mount points for the cache
+echo "Installing packages from boot media cache into RAM..."
 CACHE_FOUND=0
-
-# First, try common boot media mount points
-for MOUNT_POINT in /media/boot /media/ENTROPYLAB /mnt/ENTROPYLAB /boot /media/*; do
-  if [ -d "$MOUNT_POINT/cache" ] && [ -n "$(ls -A$MOUNT_POINT/cache/*.apk 2>/dev/null | head -1)" ]; then
+for MOUNT_POINT in /media/mmcblk0p1 /media/ENTROPYLAB /media/ALPINE /media/boot /media/*; do
+  if [ -d "$MOUNT_POINT/cache" ] && ls "$MOUNT_POINT/cache"/*.apk >/dev/null 2>&1; then
     echo "Found cache at: $MOUNT_POINT/cache"
-    apk add --allow-untrusted $MOUNT_POINT/cache/*.apk 2>&1 | head -20
+    apk add --allow-untrusted --no-network "$MOUNT_POINT/cache"/*.apk
     CACHE_FOUND=1
     break
   fi
 done
-
-if [ $CACHE_FOUND -eq 0 ]; then
-  echo "WARNING: Could not find cache packages. Packages must be installed manually or via network."
-else
-  echo "Cache package installation completed."
+if [ "$CACHE_FOUND" -eq 0 ]; then
+  echo "WARNING: cache/*.apk not found on boot media."
 fi
 EOF
 chmod +x ovl_root/etc/local.d/00-install-cache.start
 
-```
-
-#### 5.4 Copy the app and create the startup service
-
-*(Updated with robust dependency order, hardware group permissions, fallback cache installation, and profile directory protection).*
-
-```zsh
-mkdir -p ovl_root/var/www/entropylab
-cp -R app_assets/* ovl_root/var/www/entropylab/
-chmod -R 755 ovl_root/var/www/entropylab
-
-mkdir -p ovl_root/etc/init.d
-cat << 'EOF' > ovl_root/etc/init.d/entropylab
-#!/sbin/openrc-run
-name="EntropyLab App"
-
-depend() {
-  after localmount local eudev local.d
-  keyword -jail
-}
-
-start_pre() {
-# Ensure hardware groups exist before assigning the user to them
-  addgroup -S video 2>/dev/null || true
-  addgroup -S input 2>/dev/null || true
-
-  if ! id -u entropylab >/dev/null 2>&1; then
-    adduser -D -u 1000 -G video,input -s /bin/ash entropylab
+cat > ovl_root/etc/local.d/10-html-copy.start << 'EOF'
+#!/bin/sh
+boot=""
+for d in /media/mmcblk0p1 /media/ENTROPYLAB /media/ALPINE /media/*; do
+  [ -d "$d" ] || continue
+  if [ -f "$d/cmdline.txt" ] || [ -d "$d/html" ]; then
+    boot="$d"
+    break
   fi
-  chown -R entropylab:entropylab /home/entropylab
-}
-
-start() {
-  ebegin "Starting Hardened EntropyLab App"
-
-  # Fallback check to install packages from cache if not already present
-  if ! command -v httpd >/dev/null 2>&1 || ! command -v cage >/dev/null 2>&1; then
-    for MOUNT_POINT in /media/boot /media/ENTROPYLAB /mnt/ENTROPYLAB /boot /media/*; do
-      if [ -d "$MOUNT_POINT/cache" ]; then
-        apk add --allow-untrusted --no-network $MOUNT_POINT/cache/*.apk 2>/dev/null
-        break
-      fi
-    done
-  fi
-
-  export XDG_RUNTIME_DIR=/tmp/runtime-root
-  mkdir -p $XDG_RUNTIME_DIR
-  chown -R entropylab:entropylab $XDG_RUNTIME_DIR
-  chmod 0700 $XDG_RUNTIME_DIR
-
-  # Ensure user-data dir exists and is owned by entropylab to prevent crashes
-  mkdir -p /tmp/chrome
-  chown -R entropylab:entropylab /tmp/chrome
-  chmod 0700 /tmp/chrome
-
-  # Local read-only web server (Same-Origin Policy sandbox)
-  httpd -p 127.0.0.1:8080 -h /var/www/entropylab -u nobody:nobody
-
-  su - entropylab -c "
-    export XDG_RUNTIME_DIR=/tmp/runtime-root
-    cage -d -- chromium-browser \
-      --incognito \
-      --no-first-run \
-      --no-default-browser-check \
-      --bwsi \
-      --disable-sync \
-      --disable-extensions \
-      --disable-component-update \
-      --disable-component-extensions-with-background-pages \
-      --disable-notifications \
-      --disable-background-networking \
-      --disable-client-side-phishing-detection \
-      --disable-session-crashed-bubble \
-      --disable-infobars \
-      --disable-breakpad \
-      --disable-domain-reliability \
-      --disable-speech-api \
-      --no-pings \
-      --disable-features=AccountConsistency,TranslateUI,MediaRouter,DialMediaRouteProvider,AutofillServerCommunication,CertificateTransparencyComponentUpdater,OptimizationHints \
-      --password-store=basic \
-      --user-data-dir=/tmp/chrome \
-      [http://127.0.0.1:8080/entropylab.html](http://127.0.0.1:8080/entropylab.html) &
-  "
-  eend $?
-}
-
-stop() {
-  ebegin "Stopping EntropyLab App"
-  killall chromium-browser cage httpd
-  eend $?
-}
+done
+mkdir -p /tmp/html
+chmod 755 /tmp/html
+if [ -n "$boot" ] && [ -d "$boot/html" ]; then
+  cp -a "$boot/html/." /tmp/html/ 2>/dev/null || true
+  chmod -R a+rX /tmp/html
+fi
+if [ -n "$boot" ]; then
+  mount -o remount,ro "$boot" 2>/dev/null || true
+fi
+exit 0
 EOF
-chmod +x ovl_root/etc/init.d/entropylab
+chmod +x ovl_root/etc/local.d/10-html-copy.start
 
+# --- Xorg for Pi 4/5 (vc4 KMS) ---
+mkdir -p ovl_root/etc/X11/xorg.conf.d
+cat > ovl_root/etc/X11/xorg.conf.d/99-vc4.conf << 'EOF'
+Section "OutputClass"
+    Identifier "vc4"
+    MatchDriver "vc4"
+    Driver "modesetting"
+    Option "PrimaryGPU" "true"
+EndSection
+EOF
+
+# --- Chromium flags ---
+# musl/Alpine often needs --no-sandbox. This machine is air-gapped and physically trusted.
+mkdir -p ovl_root/etc/chromium
+cat > ovl_root/etc/chromium/chromium.conf << 'EOF'
+CHROMIUM_FLAGS="--no-sandbox --disable-gpu-sandbox --user-data-dir=/tmp/chromium-data --no-first-run --no-default-browser-check --disable-sync --disable-background-networking --disable-features=TranslateUI"
+EOF
+
+# --- user home / session (user is created at first boot if missing) ---
+mkdir -p ovl_root/home/entropylab/.config/openbox
+mkdir -p ovl_root/usr/local/bin
+
+cat > ovl_root/usr/local/bin/entropylab-firstboot.sh << 'EOF'
+#!/bin/sh
+# Create the desktop user once packages exist. Safe to run every boot.
+addgroup -S video 2>/dev/null || true
+addgroup -S input 2>/dev/null || true
+addgroup -S audio 2>/dev/null || true
+if ! id entropylab >/dev/null 2>&1; then
+  adduser -D -s /bin/ash entropylab
+  echo "entropylab:entropylab" | chpasswd
+  addgroup entropylab video 2>/dev/null || true
+  addgroup entropylab input 2>/dev/null || true
+  addgroup entropylab audio 2>/dev/null || true
+fi
+chown -R entropylab:entropylab /home/entropylab 2>/dev/null || true
+exit 0
+EOF
+chmod +x ovl_root/usr/local/bin/entropylab-firstboot.sh
+
+# run user creation after cache install
+cat > ovl_root/etc/local.d/05-user.start << 'EOF'
+#!/bin/sh
+/usr/local/bin/entropylab-firstboot.sh
+EOF
+chmod +x ovl_root/etc/local.d/05-user.start
+
+cat > ovl_root/home/entropylab/.profile << 'EOF'
+# Wait until X is actually installed (cache unpack), then start it on tty1.
+if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
+  i=0
+  while [ "$i" -lt 120 ]; do
+    command -v startx >/dev/null 2>&1 && break
+    sleep 2
+    i=$((i + 1))
+  done
+  exec startx
+fi
+EOF
+
+cat > ovl_root/home/entropylab/.xinitrc << 'EOF'
+#!/bin/sh
+export XDG_RUNTIME_DIR=/tmp/runtime-entropylab
+mkdir -p "$XDG_RUNTIME_DIR" /tmp/chromium-data
+chmod 700 "$XDG_RUNTIME_DIR"
+xset -dpms 2>/dev/null || true
+xset s off 2>/dev/null || true
+setxkbmap us 2>/dev/null || true
+tint2 &
+exec openbox-session
+EOF
+chmod +x ovl_root/home/entropylab/.xinitrc
+
+cat > ovl_root/home/entropylab/.config/openbox/menu.xml << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_menu>
+<menu id="root-menu" label="EntropyLab">
+  <item label="Chromium"><action name="Execute"><execute>chromium-browser</execute></action></item>
+  <item label="Open EntropyLab HTML"><action name="Execute"><execute>chromium-browser file:///tmp/html/entropylab.html</execute></action></item>
+  <item label="Files"><action name="Execute"><execute>pcmanfm /tmp/html</execute></action></item>
+  <item label="Terminal"><action name="Execute"><execute>xterm</execute></action></item>
+  <separator />
+  <item label="Restart X"><action name="Exit"/></item>
+</menu>
+</openbox_menu>
+EOF
+
+cat > ovl_root/home/entropylab/.config/openbox/rc.xml << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_config>
+  <focus><focusNew>yes</focusNew></focus>
+  <theme><name>Clearlooks</name><titleLayout>NLIMC</titleLayout></theme>
+  <desktops><number>1</number><firstdesk>1</firstdesk></desktops>
+  <keyboard>
+    <keybind key="A-F4"><action name="Close"/></keybind>
+    <keybind key="A-Tab"><action name="NextWindow"/></keybind>
+    <keybind key="W-space"><action name="ShowMenu"><menu>root-menu</menu></action></keybind>
+  </keyboard>
+  <mouse>
+    <context name="Root">
+      <mousebind button="Right" action="Press">
+        <action name="ShowMenu"><menu>root-menu</menu></action>
+      </mousebind>
+    </context>
+  </mouse>
+  <menu><file>menu.xml</file></menu>
+</openbox_config>
+EOF
+
+# --- autologin on tty1 (agetty is in cache; inittab is applied from overlay) ---
+cat > ovl_root/etc/inittab << 'EOF'
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default
+
+tty1::respawn:/sbin/agetty --autologin entropylab --noclear tty1 linux
+tty2::respawn:/sbin/getty 38400 tty2
+tty3::respawn:/sbin/getty 38400 tty3
+
+::ctrlaltdel:/sbin/reboot
+::shutdown:/sbin/openrc shutdown
+EOF
+
+echo "Overlay tree ready."
 ```
-
-#### 5.5 Enable services at boot
-
-```zsh
-mkdir -p ovl_root/etc/runlevels/{sysinit,default}
-echo "entropylab" > ovl_root/etc/hostname
-
-ln -sf /etc/init.d/udev        ovl_root/etc/runlevels/sysinit/udev
-ln -sf /etc/init.d/udev-trigger ovl_root/etc/runlevels/sysinit/udev-trigger
-ln -sf /etc/init.d/entropylab  ovl_root/etc/runlevels/default/entropylab
-
-```
-
-> The overlay is packaged only after the kernel/modloop work below is finished.
 
 ---
 
-### 6. Download Alpine, scrub modloop (drivers + firmware), lock down radios
-
-#### 6.1 Download and extract Alpine Raspberry Pi image (v3.20.10)
+## 6. Download Alpine Raspberry Pi boot files (`latest-stable`)
 
 ```zsh
-curl -LO https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-rpi-3.20.10-aarch64.tar.gz
-tar -xzf alpine-rpi-3.20.10-aarch64.tar.gz -C boot/
-rm alpine-rpi-3.20.10-aarch64.tar.gz
+RPI_FILE=$(docker run --rm --platform linux/arm64 alpine:latest sh -c '
+  wget -qO- https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/latest-releases.yaml \
+    | awk "\$0 ~ /flavor: alpine-rpi/ {inr=1} inr && \$1 == \"file:\" && \$2 ~ /\\.tar\\.gz$/ {print \$2; exit}"
+')
 
-```
-
-#### 6.2 Locate modloop and rebuild it (remove drivers + firmware)
-
-```zsh
-MODLOOP=$(find boot -name 'modloop-rpi' -type f | head -1)
-if [ -z "$MODLOOP" ]; then
-  echo "❌ modloop-rpi not found after extraction."
-  echo "   Contents of boot/ (first 20 entries):"
-  find boot -type f | head -20
-  echo "   Check that the Alpine tarball downloaded and extracted correctly."
+if [ -z "$RPI_FILE" ]; then
+  echo "Could not resolve alpine-rpi tarball name from latest-stable."
   exit 1
 fi
-echo "Found modloop at: $MODLOOP"
 
-# Copy modloop to a temp location for modification (fixes permission issues)
-MODLOOP_TEMP="/tmp/modloop-rpi-build"
-rm -rf "$MODLOOP_TEMP"
-cp "$MODLOOP" "$MODLOOP_TEMP"
+echo "Downloading $RPI_FILE ..."
+curl -fL --progress-bar -o rpi.tar.gz \
+  "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/$RPI_FILE"
 
-docker run --rm -v "$(pwd):/work" -v "$MODLOOP_TEMP:/modloop_temp" -w /work --platform linux/arm64 alpine:latest sh -c '
-  apk add --no-cache squashfs-tools
-  unsquashfs -d /tmp/modloop /modloop_temp
-  rm -rf /tmp/modloop/modules/*/kernel/drivers/net /tmp/modloop/modules/*/kernel/drivers/bluetooth /tmp/modloop/modules/*/kernel/drivers/net/wireless /tmp/modloop/modules/*/kernel/net
-  rm -rf /tmp/modloop/modules/firmware/brcm* /tmp/modloop/modules/firmware/cypress* /tmp/modloop/modules/firmware/ath* /tmp/modloop/modules/firmware/iwlwifi* /tmp/modloop/modules/firmware/rtlwifi* /tmp/modloop/modules/firmware/rt* /tmp/modloop/modules/firmware/ti-connectivity /tmp/modloop/modules/firmware/bluetooth
-  find /tmp/modloop -type f \( -name "modules.dep*" -o -name "modules.alias*" -o -name "modules.symbols*" -o -name "modules.builtin*" -o -name "modules.devname" -o -name "modules.softdep" \) -delete
-  mksquashfs /tmp/modloop /modloop_temp -noappend -comp xz
-'
-
-# Copy the modified modloop back to the original location
-cp "$MODLOOP_TEMP" "$MODLOOP"
-rm "$MODLOOP_TEMP"
-echo "✅ modloop rebuilt and hardened."
-
+tar -xzf rpi.tar.gz -C boot/
+rm rpi.tar.gz
+echo "Boot files extracted."
 ```
 
-#### 6.3 Disable Wi-Fi / Bluetooth radios in firmware config
+---
+
+## 7. Lock down firmware and kernel networking
 
 ```zsh
-cat << 'EOF' >> boot/usercfg.txt
+cat > boot/usercfg.txt << 'EOF'
+# EntropyLab air-gapped Pi 4/5
 dtoverlay=disable-wifi
 dtoverlay=disable-bt
-gpu_mem=128
+
+# DRM/KMS for Xorg + Chromium
+dtoverlay=vc4-kms-v3d
+max_framebuffers=2
+disable_fw_kms_setup=1
+
+hdmi_force_hotplug=1
 EOF
 
+# Do not let the kernel bring up an IP stack
+if ! grep -q 'ip=off' boot/cmdline.txt; then
+  gsed -i 's/$/ ip=off/' boot/cmdline.txt
+fi
+
+# HDMI console
+if ! grep -q 'console=tty1' boot/cmdline.txt; then
+  gsed -i 's/$/ console=tty1/' boot/cmdline.txt
+fi
 ```
 
-#### 6.4 Disable kernel IP stack
+---
 
-```zsh
-gsed -i 's/$/ ip=off/' boot/cmdline.txt
-
-```
-
-#### 6.5 Package the overlay (must be last step that touches ovl_root)
+## 8. Package the overlay onto the boot files
 
 ```zsh
 tar -czf boot/entropylab.apkovl.tar.gz -C ovl_root .
-echo "✅ Overlay packaged as boot/entropylab.apkovl.tar.gz"
+mkdir -p boot/html
+cat > boot/html/README.txt << 'EOF'
+Put entropylab.html in this folder on your Mac,
+then eject the card and boot the Pi.
 
+On the Pi it is copied into RAM as:
+  file:///tmp/html/entropylab.html
+
+Right-click the desktop → Open EntropyLab HTML
+EOF
+
+echo "Overlay packaged: boot/entropylab.apkovl.tar.gz"
 ```
 
 ---
 
-### 7. Create the bootable media
+## 9. Copy onto an SD card (erases the card)
 
-#### Option A – Flash directly to microSD or USB stick
+> `diskutil` will ask for your **macOS admin password**.
 
-> **Password note:** `diskutil partitionDisk` will ask for your **macOS User Administrator Password**.
-
-##### 7A.1 List available disks
+### 9.1 List disks
 
 ```zsh
 diskutil list
-
 ```
 
-**What it does:** Displays all mounted disks. Look for your microSD card or USB stick and note its identifier (e.g., `disk4`).
+Note the SD card identifier (example: `disk4`). It must **not** be `disk0`.
 
----
+### 9.2 Select, confirm, erase as FAT32 / MBR
 
-##### 7A.2 Prompt for disk identifier
-
-After reviewing the disk list above, run this to select which disk to erase:
+The Pi firmware wants **MBR**, not GPT.
 
 ```zsh
 read "TARGET_DISK?Enter the disk identifier to erase (example: disk4): "
 if [ -z "$TARGET_DISK" ]; then
-  echo "❌ No disk selected. Aborting."
+  echo "No disk selected. Aborting."
   exit 1
 fi
 
-```
-
----
-
-##### 7A.3 Validate the disk exists
-
-```zsh
 if ! diskutil info "/dev/$TARGET_DISK" >/dev/null 2>&1; then
-  echo "❌ Disk /dev/$TARGET_DISK not found."
+  echo "Disk /dev/$TARGET_DISK not found."
   exit 1
 fi
 
-```
-
----
-
-##### 7A.4 Show disk details and confirm erasure
-
-```zsh
 DISK_SIZE=$(diskutil info "/dev/$TARGET_DISK" | grep "Disk Size" | sed 's/.*: *//')
 echo ""
 echo "About to erase: /dev/$TARGET_DISK"
 echo "Size: $DISK_SIZE"
 read "CONFIRM?This cannot be undone. Type YES to confirm: "
 if [ "$CONFIRM" != "YES" ]; then
-  echo "❌ Aborted."
+  echo "Aborted."
   exit 1
 fi
 
-```
-
-**What it does:** Shows you the disk size and asks for final confirmation. Type **`YES`** exactly to proceed.
-
----
-
-##### 7A.5 Erase and partition the disk
-
-```zsh
-echo "Erasing and partitioning /dev/$TARGET_DISK ..."
 diskutil partitionDisk "/dev/$TARGET_DISK" MBR "MS-DOS FAT32" ENTROPYLAB 0b
-
 ```
 
-**Note:** This will prompt for your **macOS admin password**.
-
----
-
-##### 7A.6 Wait for the volume to mount
+### 9.3 Wait for `/Volumes/ENTROPYLAB`, copy files
 
 ```zsh
-echo "Waiting for /Volumes/ENTROPYLAB ..."
 ATTEMPTS=0
-MAX_ATTEMPTS=30
-while [ $ATTEMPTS -lt$MAX_ATTEMPTS ]; do
-  if [ -d /Volumes/ENTROPYLAB ]; then
-    echo "✅ Volume mounted."
-    break
-  fi
-  echo "⏳ Waiting for /Volumes/ENTROPYLAB... ($((ATTEMPTS+1))/$MAX_ATTEMPTS)"
+while [ "$ATTEMPTS" -lt 30 ]; do
+  [ -d /Volumes/ENTROPYLAB ] && break
+  echo "Waiting for /Volumes/ENTROPYLAB... ($((ATTEMPTS+1))/30)"
   sleep 1
   ATTEMPTS=$((ATTEMPTS + 1))
 done
 
 if [ ! -d /Volumes/ENTROPYLAB ]; then
-  echo "❌ Timeout: /Volumes/ENTROPYLAB never appeared."
-  echo "   Check Disk Utility. Did the partition step succeed?"
+  echo "Timeout: volume never appeared. Check Disk Utility."
   exit 1
 fi
 
-```
-
----
-
-##### 7A.7 Copy files to the disk
-
-```zsh
-echo "Copying files..."
-cp -R boot/* /Volumes/ENTROPYLAB/
+echo "Copying boot files..."
+ditto boot/ /Volumes/ENTROPYLAB/
 mkdir -p /Volumes/ENTROPYLAB/cache
-cp -R cache/* /Volumes/ENTROPYLAB/cache/
+ditto cache/ /Volumes/ENTROPYLAB/cache/
+mkdir -p /Volumes/ENTROPYLAB/html
 
+echo "Card is populated. Do NOT eject yet if you still need to add the HTML."
 ```
+
+You should see at least: `cmdline.txt`, `config.txt`, `usercfg.txt`, `entropylab.apkovl.tar.gz`, `cache/`, `html/`.
 
 ---
 
-##### 7A.8 Safely eject the disk
+## 10. Add the HTML (last thing before you walk to the Pi)
+
+With the card still mounted:
 
 ```zsh
+cp /path/to/entropylab.html /Volumes/ENTROPYLAB/html/entropylab.html
+# optional extra files:
+# cp other-assets... /Volumes/ENTROPYLAB/html/
+
 sync
 diskutil eject /Volumes/ENTROPYLAB
-echo "✅ Done. Card/stick is ready to boot on a Raspberry Pi 4/5."
-
+echo "Ejected. Card is ready."
 ```
+
+Replace `/path/to/entropylab.html` with the real path. You can repeat this any time: mount the card on the Mac, replace the HTML, eject. The Pi never writes it back.
 
 ---
 
-#### Option B – Create a distributable .img file
+## 11. Use on the Pi
 
-```zsh
-docker run --rm -v "$(pwd):/work" -w /work --platform linux/arm64 alpine:latest sh -c "
-  apk add --no-cache dosfstools mtools && \
-  dd if=/dev/zero of=entropylab_rpi.img bs=1M count=320 && \
-  mkfs.vfat -F 32 -n ENTROPYLAB entropylab_rpi.img && \
-  mcopy -i entropylab_rpi.img -s boot/* ::/ && \
-  mcopy -i entropylab_rpi.img -s cache ::/
-"
+1. No Ethernet cable.
+2. HDMI + keyboard + mouse.
+3. Insert the card, power on.
+4. Wait. **1–2 minutes** of text while packages load into RAM is expected.
+5. You should get the Openbox desktop, logged in as `entropylab`.
+6. **Right-click the desktop** → **Open EntropyLab HTML**  
+   (or open Chromium and go to `file:///tmp/html/entropylab.html`).
+7. Use Chromium normally (windowed, not kiosk).
+8. Power off when done. Nothing useful is written back to the card.
 
-if [ -f entropylab_rpi.img ]; then
-  IMG_SIZE=$(ls -lh entropylab_rpi.img | awk '{print $5}')
-  echo "✅ Image created: entropylab_rpi.img ($IMG_SIZE)"
-  echo "   Quick listing of contents:"
-  docker run --rm -v "$(pwd):/work" -w /work --platform linux/arm64 alpine:latest sh -c "
-    apk add --no-cache mtools >/dev/null && \
-    mdir -i /work/entropylab_rpi.img ::/ | head -20
-  "
-  echo "   You can flash this later with Raspberry Pi Imager, balenaEtcher, or dd."
-else
-  echo "❌ Image creation failed — entropylab_rpi.img not found."
-  exit 1
-fi
+**Passwords** (rarely needed because of auto-login): user `entropylab` / `entropylab`. Root is whatever Alpine left as default unless you set one; you should not need root.
 
-```
+**If Chromium is blank or crashy:** `--no-sandbox` is already set. That is required on musl/Alpine more often than not.
+
+**If there is no HTML:** the file was not named `entropylab.html` inside `html/` on the card.
+
+**If X never starts:** wait the full two minutes. Watch the text console for `Installing packages from boot media cache`. If that warning appears, `cache/` did not copy onto the card.
 
 ---
 
-## Quick checklist before you boot the Pi
+## 12. Power off
 
-* [ ] `app_assets/entropylab.html` was present when you ran the build
-* [ ] You saw the messages "✅ Overlay packaged" and "✅ Done" / "✅ Image created"
-* [ ] The microSD / USB is safely ejected
-* [ ] Pi has at least 2 GB RAM
-* [ ] No network cable is attached (optional but recommended for the air-gapped use case)
+Normal power-off is enough.
 
-Insert the card, power on the Pi, and EntropyLab should start automatically in full-screen Chromium.
+Chromium profile, bash history, and `/tmp` live in RAM. The boot partition is remounted read-only after the HTML copy. There is no `lbu commit` on the Pi.
+
+Reuse the same card later: it still only has the OS files plus whatever is in `html/`. Swap the HTML on a Mac if you want a different tool.
+
+---
+
+## Notes
+
+**Rebuild from scratch:** delete `boot/`, `cache/`, `ovl_root/` in the build folder and start from step 3.
+
+**Why Openbox, not XFCE:** you asked for minimal. Openbox + tint2 + pcmanfm + xterm is a real desktop (menu, panel, files, terminal) without XFCE’s extra stack.
+
+**Why packages install on every boot:** that **is** Alpine diskless. The install source is the SD card, not the network. This is the same cache pattern the previous guide used, which is the standard Alpine RAM-only model.
+
+**Why we did not strip the kernel modloop:** firmware overlays (`disable-wifi` / `disable-bt`) plus `ip=off` plus no networking service is the proven, standard lock-down. Rebuilding modloop is fragile across Alpine versions. We can add it later if you want a second layer.
+
+**Intel Macs** are not covered. This workflow needs native `linux/arm64` containers on Apple Silicon.
