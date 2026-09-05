@@ -68,7 +68,7 @@ fi
 
 # Install Homebrew if missing
 if ! command -v brew >/dev/null 2>&1; then
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  /bin/bash -c "$(curl -fsSL [https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh](https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh))"
 fi
 
 export PATH="/opt/homebrew/bin:$PATH"
@@ -79,6 +79,7 @@ brew install --cask orbstack
 brew install coreutils gnu-sed
 
 echo "✅ System Bootstrap complete."
+
 ```
 
 ---
@@ -87,6 +88,7 @@ echo "✅ System Bootstrap complete."
 
 ```zsh
 mkdir -p boot cache ovl_root app_assets
+
 ```
 
 **Important – put your app here now:**
@@ -98,6 +100,7 @@ The finished path must be:
 
 ```text
 ./app_assets/entropylab.html
+
 ```
 
 **Safety check** (stops with a clear message if the file is missing):
@@ -109,6 +112,7 @@ if [ ! -f app_assets/entropylab.html ]; then
   exit 1
 fi
 echo "✅ entropylab.html found."
+
 ```
 
 ---
@@ -130,7 +134,7 @@ open -a OrbStack 2>/dev/null || {
 RETRY=0
 MAX_RETRY=30
 until docker info >/dev/null 2>&1; do
-  if [ $RETRY -ge $MAX_RETRY ]; then
+  if [ $RETRY -ge$MAX_RETRY ]; then
     echo "❌ Docker engine did not become ready after 30 seconds."
     echo "   Open OrbStack manually from Applications and run this step again."
     exit 1
@@ -154,6 +158,7 @@ docker run --rm -v "$(pwd):/work" -w /work --platform linux/arm64 alpine:latest 
     eudev \
     eudev-openrc
 "
+
 ```
 
 ---
@@ -164,6 +169,7 @@ docker run --rm -v "$(pwd):/work" -w /work --platform linux/arm64 alpine:latest 
 
 ```zsh
 mkdir -p ovl_root/home/entropylab
+
 ```
 
 #### 5.2 Auto-mount script for extra USB / SD cards
@@ -200,6 +206,7 @@ elif [ "$BUS" = "usb" ]; then
 fi
 EOF
 chmod +x ovl_root/usr/local/bin/auto-mount.sh
+
 ```
 
 #### 5.3 Early local.d script to install cache packages
@@ -215,7 +222,7 @@ CACHE_FOUND=0
 
 # First, try common boot media mount points
 for MOUNT_POINT in /media/boot /media/ENTROPYLAB /mnt/ENTROPYLAB /boot /media/*; do
-  if [ -d "$MOUNT_POINT/cache" ] && [ -n "$(ls -A $MOUNT_POINT/cache/*.apk 2>/dev/null | head -1)" ]; then
+  if [ -d "$MOUNT_POINT/cache" ] && [ -n "$(ls -A$MOUNT_POINT/cache/*.apk 2>/dev/null | head -1)" ]; then
     echo "Found cache at: $MOUNT_POINT/cache"
     apk add --allow-untrusted $MOUNT_POINT/cache/*.apk 2>&1 | head -20
     CACHE_FOUND=1
@@ -230,9 +237,12 @@ else
 fi
 EOF
 chmod +x ovl_root/etc/local.d/00-install-cache.start
+
 ```
 
 #### 5.4 Copy the app and create the startup service
+
+*(Updated with robust dependency order, hardware group permissions, fallback cache installation, and profile directory protection).*
 
 ```zsh
 mkdir -p ovl_root/var/www/entropylab
@@ -245,13 +255,13 @@ cat << 'EOF' > ovl_root/etc/init.d/entropylab
 name="EntropyLab App"
 
 depend() {
-  after localmount local eudev
+  after localmount local eudev local.d
   keyword -jail
 }
 
 start_pre() {
   if ! id -u entropylab >/dev/null 2>&1; then
-    adduser -D -u 1000 -s /bin/ash entropylab
+    adduser -D -u 1000 -G video,input -s /bin/ash entropylab
   fi
   chown -R entropylab:entropylab /home/entropylab
 }
@@ -259,10 +269,25 @@ start_pre() {
 start() {
   ebegin "Starting Hardened EntropyLab App"
 
+  # Fallback check to install packages from cache if not already present
+  if ! command -v httpd >/dev/null 2>&1 || ! command -v cage >/dev/null 2>&1; then
+    for MOUNT_POINT in /media/boot /media/ENTROPYLAB /mnt/ENTROPYLAB /boot /media/*; do
+      if [ -d "$MOUNT_POINT/cache" ]; then
+        apk add --allow-untrusted --no-network $MOUNT_POINT/cache/*.apk 2>/dev/null
+        break
+      fi
+    done
+  fi
+
   export XDG_RUNTIME_DIR=/tmp/runtime-root
   mkdir -p $XDG_RUNTIME_DIR
   chown -R entropylab:entropylab $XDG_RUNTIME_DIR
   chmod 0700 $XDG_RUNTIME_DIR
+
+  # Ensure user-data dir exists and is owned by entropylab to prevent crashes
+  mkdir -p /tmp/chrome
+  chown -R entropylab:entropylab /tmp/chrome
+  chmod 0700 /tmp/chrome
 
   # Local read-only web server (Same-Origin Policy sandbox)
   httpd -p 127.0.0.1:8080 -h /var/www/entropylab -u nobody:nobody
@@ -290,7 +315,7 @@ start() {
       --disable-features=AccountConsistency,TranslateUI,MediaRouter,DialMediaRouteProvider,AutofillServerCommunication,CertificateTransparencyComponentUpdater,OptimizationHints \
       --password-store=basic \
       --user-data-dir=/tmp/chrome \
-      http://127.0.0.1:8080/entropylab.html &
+      [http://127.0.0.1:8080/entropylab.html](http://127.0.0.1:8080/entropylab.html) &
   "
   eend $?
 }
@@ -302,6 +327,7 @@ stop() {
 }
 EOF
 chmod +x ovl_root/etc/init.d/entropylab
+
 ```
 
 #### 5.5 Enable services at boot
@@ -313,6 +339,7 @@ echo "entropylab" > ovl_root/etc/hostname
 ln -sf /etc/init.d/udev        ovl_root/etc/runlevels/sysinit/udev
 ln -sf /etc/init.d/udev-trigger ovl_root/etc/runlevels/sysinit/udev-trigger
 ln -sf /etc/init.d/entropylab  ovl_root/etc/runlevels/default/entropylab
+
 ```
 
 > The overlay is packaged only after the kernel/modloop work below is finished.
@@ -324,9 +351,10 @@ ln -sf /etc/init.d/entropylab  ovl_root/etc/runlevels/default/entropylab
 #### 6.1 Download and extract Alpine Raspberry Pi image (v3.20.10)
 
 ```zsh
-curl -LO https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-rpi-3.20.10-aarch64.tar.gz
+curl -LO [https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-rpi-3.20.10-aarch64.tar.gz](https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-rpi-3.20.10-aarch64.tar.gz)
 tar -xzf alpine-rpi-3.20.10-aarch64.tar.gz -C boot/
 rm alpine-rpi-3.20.10-aarch64.tar.gz
+
 ```
 
 #### 6.2 Locate modloop and rebuild it (remove drivers + firmware)
@@ -367,11 +395,7 @@ docker run --rm -v "$(pwd):/work" -v "$MODLOOP_TEMP:/modloop_temp" -w /work --pl
     /tmp/modloop/modules/firmware/ti-connectivity \
     /tmp/modloop/modules/firmware/bluetooth && \
   # Clean dependency index files so the kernel does not look for removed modules
-  find /tmp/modloop -type f \\( \
-    -name 'modules.dep*' -o -name 'modules.alias*' -o \
-    -name 'modules.symbols*' -o -name 'modules.builtin*' -o \
-    -name 'modules.devname' -o -name 'modules.softdep' \
-  \\) -delete && \
+  find /tmp/modloop -type f \\( \     -name 'modules.dep*' -o -name 'modules.alias*' -o \     -name 'modules.symbols*' -o -name 'modules.builtin*' -o \     -name 'modules.devname' -o -name 'modules.softdep' \   \\) -delete && \
   mksquashfs /tmp/modloop /modloop_temp -noappend -comp xz
 "
 
@@ -379,6 +403,7 @@ docker run --rm -v "$(pwd):/work" -v "$MODLOOP_TEMP:/modloop_temp" -w /work --pl
 cp "$MODLOOP_TEMP" "$MODLOOP"
 rm "$MODLOOP_TEMP"
 echo "✅ modloop rebuilt and hardened."
+
 ```
 
 #### 6.3 Disable Wi-Fi / Bluetooth radios in firmware config
@@ -389,12 +414,14 @@ dtoverlay=disable-wifi
 dtoverlay=disable-bt
 gpu_mem=128
 EOF
+
 ```
 
 #### 6.4 Disable kernel IP stack
 
 ```zsh
 gsed -i 's/$/ ip=off/' boot/cmdline.txt
+
 ```
 
 #### 6.5 Package the overlay (must be last step that touches ovl_root)
@@ -402,6 +429,7 @@ gsed -i 's/$/ ip=off/' boot/cmdline.txt
 ```zsh
 tar -czf boot/entropylab.apkovl.tar.gz -C ovl_root .
 echo "✅ Overlay packaged as boot/entropylab.apkovl.tar.gz"
+
 ```
 
 ---
@@ -416,6 +444,7 @@ echo "✅ Overlay packaged as boot/entropylab.apkovl.tar.gz"
 
 ```zsh
 diskutil list
+
 ```
 
 **What it does:** Displays all mounted disks. Look for your microSD card or USB stick and note its identifier (e.g., `disk4`).
@@ -432,6 +461,7 @@ if [ -z "$TARGET_DISK" ]; then
   echo "❌ No disk selected. Aborting."
   exit 1
 fi
+
 ```
 
 ---
@@ -443,6 +473,7 @@ if ! diskutil info "/dev/$TARGET_DISK" >/dev/null 2>&1; then
   echo "❌ Disk /dev/$TARGET_DISK not found."
   exit 1
 fi
+
 ```
 
 ---
@@ -459,6 +490,7 @@ if [ "$CONFIRM" != "YES" ]; then
   echo "❌ Aborted."
   exit 1
 fi
+
 ```
 
 **What it does:** Shows you the disk size and asks for final confirmation. Type **`YES`** exactly to proceed.
@@ -470,6 +502,7 @@ fi
 ```zsh
 echo "Erasing and partitioning /dev/$TARGET_DISK ..."
 diskutil partitionDisk "/dev/$TARGET_DISK" MBR "MS-DOS FAT32" ENTROPYLAB 0b
+
 ```
 
 **Note:** This will prompt for your **macOS admin password**.
@@ -482,7 +515,7 @@ diskutil partitionDisk "/dev/$TARGET_DISK" MBR "MS-DOS FAT32" ENTROPYLAB 0b
 echo "Waiting for /Volumes/ENTROPYLAB ..."
 ATTEMPTS=0
 MAX_ATTEMPTS=30
-while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+while [ $ATTEMPTS -lt$MAX_ATTEMPTS ]; do
   if [ -d /Volumes/ENTROPYLAB ]; then
     echo "✅ Volume mounted."
     break
@@ -497,6 +530,7 @@ if [ ! -d /Volumes/ENTROPYLAB ]; then
   echo "   Check Disk Utility. Did the partition step succeed?"
   exit 1
 fi
+
 ```
 
 ---
@@ -508,6 +542,7 @@ echo "Copying files..."
 cp -R boot/* /Volumes/ENTROPYLAB/
 mkdir -p /Volumes/ENTROPYLAB/cache
 cp -R cache/* /Volumes/ENTROPYLAB/cache/
+
 ```
 
 ---
@@ -518,6 +553,7 @@ cp -R cache/* /Volumes/ENTROPYLAB/cache/
 sync
 diskutil eject /Volumes/ENTROPYLAB
 echo "✅ Done. Card/stick is ready to boot on a Raspberry Pi 4/5."
+
 ```
 
 ---
@@ -546,16 +582,17 @@ else
   echo "❌ Image creation failed — entropylab_rpi.img not found."
   exit 1
 fi
+
 ```
 
 ---
 
 ## Quick checklist before you boot the Pi
 
-- [ ] `app_assets/entropylab.html` was present when you ran the build
-- [ ] You saw the messages "✅ Overlay packaged" and "✅ Done" / "✅ Image created"
-- [ ] The microSD / USB is safely ejected
-- [ ] Pi has at least 2 GB RAM
-- [ ] No network cable is attached (optional but recommended for the air-gapped use case)
+* [ ] `app_assets/entropylab.html` was present when you ran the build
+* [ ] You saw the messages "✅ Overlay packaged" and "✅ Done" / "✅ Image created"
+* [ ] The microSD / USB is safely ejected
+* [ ] Pi has at least 2 GB RAM
+* [ ] No network cable is attached (optional but recommended for the air-gapped use case)
 
 Insert the card, power on the Pi, and EntropyLab should start automatically in full-screen Chromium.
