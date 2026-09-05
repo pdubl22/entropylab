@@ -375,29 +375,14 @@ MODLOOP_TEMP="/tmp/modloop-rpi-build"
 rm -rf "$MODLOOP_TEMP"
 cp "$MODLOOP" "$MODLOOP_TEMP"
 
-docker run --rm -v "$(pwd):/work" -v "$MODLOOP_TEMP:/modloop_temp" -w /work --platform linux/arm64 alpine:latest sh -c "
-  apk add --no-cache squashfs-tools && \
-  unsquashfs -d /tmp/modloop /modloop_temp && \
-  # Remove network / wireless / Bluetooth drivers
-  rm -rf \
-    /tmp/modloop/modules/*/kernel/drivers/net \
-    /tmp/modloop/modules/*/kernel/drivers/bluetooth \
-    /tmp/modloop/modules/*/kernel/drivers/net/wireless \
-    /tmp/modloop/modules/*/kernel/net && \
-  # Remove common wireless / Bluetooth firmware (Broadcom, Cypress, etc.)
-  rm -rf \
-    /tmp/modloop/modules/firmware/brcm* \
-    /tmp/modloop/modules/firmware/cypress* \
-    /tmp/modloop/modules/firmware/ath* \
-    /tmp/modloop/modules/firmware/iwlwifi* \
-    /tmp/modloop/modules/firmware/rtlwifi* \
-    /tmp/modloop/modules/firmware/rt* \
-    /tmp/modloop/modules/firmware/ti-connectivity \
-    /tmp/modloop/modules/firmware/bluetooth && \
-  # Clean dependency index files so the kernel does not look for removed modules
-  find /tmp/modloop -type f \\( \     -name 'modules.dep*' -o -name 'modules.alias*' -o \     -name 'modules.symbols*' -o -name 'modules.builtin*' -o \     -name 'modules.devname' -o -name 'modules.softdep' \   \\) -delete && \
+docker run --rm -v "$(pwd):/work" -v "$MODLOOP_TEMP:/modloop_temp" -w /work --platform linux/arm64 alpine:latest sh -c '
+  apk add --no-cache squashfs-tools
+  unsquashfs -d /tmp/modloop /modloop_temp
+  rm -rf /tmp/modloop/modules/*/kernel/drivers/net /tmp/modloop/modules/*/kernel/drivers/bluetooth /tmp/modloop/modules/*/kernel/drivers/net/wireless /tmp/modloop/modules/*/kernel/net
+  rm -rf /tmp/modloop/modules/firmware/brcm* /tmp/modloop/modules/firmware/cypress* /tmp/modloop/modules/firmware/ath* /tmp/modloop/modules/firmware/iwlwifi* /tmp/modloop/modules/firmware/rtlwifi* /tmp/modloop/modules/firmware/rt* /tmp/modloop/modules/firmware/ti-connectivity /tmp/modloop/modules/firmware/bluetooth
+  find /tmp/modloop -type f \( -name "modules.dep*" -o -name "modules.alias*" -o -name "modules.symbols*" -o -name "modules.builtin*" -o -name "modules.devname" -o -name "modules.softdep" \) -delete
   mksquashfs /tmp/modloop /modloop_temp -noappend -comp xz
-"
+'
 
 # Copy the modified modloop back to the original location
 cp "$MODLOOP_TEMP" "$MODLOOP"
