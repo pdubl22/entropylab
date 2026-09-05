@@ -351,7 +351,7 @@ ln -sf /etc/init.d/entropylab  ovl_root/etc/runlevels/default/entropylab
 #### 6.1 Download and extract Alpine Raspberry Pi image (v3.20.10)
 
 ```zsh
-curl -LO [https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-rpi-3.20.10-aarch64.tar.gz](https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-rpi-3.20.10-aarch64.tar.gz)
+curl -LO https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-rpi-3.20.10-aarch64.tar.gz
 tar -xzf alpine-rpi-3.20.10-aarch64.tar.gz -C boot/
 rm alpine-rpi-3.20.10-aarch64.tar.gz
 
