@@ -141,10 +141,13 @@ until docker info >/dev/null 2>&1; do
 done
 echo "✅ Docker engine is ready."
 
+# Fetch packages + all recursive dependencies into ./cache
+# busybox-extras provides the httpd binary used by the start script
 docker run --rm -v "$(pwd):/work" -w /work --platform linux/arm64 alpine:latest sh -c "
   apk update && \
   apk fetch --recursive -o /work/cache \
     alpine-base \
+    busybox-extras \
     cage \
     chromium \
     font-dejavu \
@@ -153,6 +156,7 @@ docker run --rm -v "$(pwd):/work" -w /work --platform linux/arm64 alpine:latest 
     eudev \
     eudev-openrc
 "
+echo "✅ Packages downloaded into cache/"
 ```
 
 ---
@@ -201,7 +205,34 @@ EOF
 chmod +x ovl_root/usr/local/bin/auto-mount.sh
 ```
 
-#### 5.3 Copy the app and create the startup service
+#### 5.3 Install packages from the boot-media cache (critical)
+
+Alpine diskless boots with almost nothing. The `.apk` files live on the microSD in `/cache`. This early script finds them and installs them into the RAM system before EntropyLab starts.
+
+```zsh
+mkdir -p ovl_root/etc/local.d
+cat << 'EOF' > ovl_root/etc/local.d/00-install-cache.start
+#!/bin/sh
+# Install all offline packages that were placed in the boot media's cache/ folder.
+
+echo "Looking for offline package cache..."
+
+for d in /media/*/cache /media/mmcblk0p1/cache /media/sda1/cache /media/sdb1/cache; do
+  if [ -d "$d" ] && ls "$d"/*.apk >/dev/null 2>&1; then
+    echo "Found package cache at $d — installing..."
+    apk add --allow-untrusted --force-non-repository "$d"/*.apk
+    echo "Package installation finished."
+    exit 0
+  fi
+done
+
+echo "WARNING: No package cache found. httpd / cage / chromium will be missing."
+exit 1
+EOF
+chmod +x ovl_root/etc/local.d/00-install-cache.start
+```
+
+#### 5.4 Copy the app and create the startup service
 
 ```zsh
 mkdir -p ovl_root/var/www/entropylab
@@ -214,7 +245,7 @@ cat << 'EOF' > ovl_root/etc/init.d/entropylab
 name="EntropyLab App"
 
 depend() {
-  after localmount eudev
+  after localmount eudev local
   keyword -jail
 }
 
@@ -234,6 +265,7 @@ start() {
   chmod 0700 $XDG_RUNTIME_DIR
 
   # Local read-only web server (Same-Origin Policy sandbox)
+  # httpd comes from busybox-extras (installed by 00-install-cache.start)
   httpd -p 127.0.0.1:8080 -h /var/www/entropylab -u nobody:nobody
 
   su - entropylab -c "
@@ -266,18 +298,21 @@ start() {
 
 stop() {
   ebegin "Stopping EntropyLab App"
-  killall chromium-browser cage httpd
+  killall chromium-browser cage httpd 2>/dev/null
   eend $?
 }
 EOF
 chmod +x ovl_root/etc/init.d/entropylab
 ```
 
-#### 5.4 Enable services at boot
+#### 5.5 Enable services at boot
 
 ```zsh
-mkdir -p ovl_root/etc/runlevels/{sysinit,default}
+mkdir -p ovl_root/etc/runlevels/{sysinit,default,boot}
 echo "entropylab" > ovl_root/etc/hostname
+
+# Enable local service so 00-install-cache.start runs
+ln -sf /etc/init.d/local ovl_root/etc/runlevels/default/local 2>/dev/null || true
 
 ln -sf /etc/init.d/udev        ovl_root/etc/runlevels/sysinit/udev
 ln -sf /etc/init.d/udev-trigger ovl_root/etc/runlevels/sysinit/udev-trigger
@@ -367,21 +402,29 @@ echo "✅ Overlay packaged as boot/entropylab.apkovl.tar.gz"
 
 ### 7. Create the bootable media
 
-#### Option A – Flash directly to microSD or USB stick
+#### Option A – Flash directly to microSD or USB stick (recommended safe blocks)
 
 > **Password note:** `diskutil partitionDisk` will ask for your **macOS User Administrator Password**.
 
+Run the following **one block at a time**. Do not paste everything at once.
+
+**Block 1 – list disks**
 ```zsh
 echo "⚠️  WARNING: You are about to ERASE one of these disks!"
 echo "Available disks:"
 diskutil list
+```
 
-read "TARGET_DISK?Enter the disk identifier to erase (example: disk4): "
-if [ -z "$TARGET_DISK" ]; then
-  echo "❌ No disk selected. Aborting."
-  exit 1
-fi
+Look at the output. Identify your microSD / USB stick (example: `disk4` or `disk5`).  
+**Never** choose `disk0` or `disk1` (those are your Mac’s internal drives).
 
+**Block 2 – set the target disk (edit the number)**
+```zsh
+TARGET_DISK=disk4
+```
+
+**Block 3 – safety check + partition**
+```zsh
 if ! diskutil info "/dev/$TARGET_DISK" >/dev/null 2>&1; then
   echo "❌ Disk /dev/$TARGET_DISK not found."
   exit 1
@@ -391,7 +434,8 @@ DISK_SIZE=$(diskutil info "/dev/$TARGET_DISK" | grep "Disk Size" | sed 's/.*: */
 echo ""
 echo "About to erase: /dev/$TARGET_DISK"
 echo "Size: $DISK_SIZE"
-read "CONFIRM?This cannot be undone. Type YES to confirm: "
+echo "Type YES (all caps) to continue:"
+read CONFIRM
 if [ "$CONFIRM" != "YES" ]; then
   echo "❌ Aborted."
   exit 1
@@ -399,8 +443,10 @@ fi
 
 echo "Erasing and partitioning /dev/$TARGET_DISK ..."
 diskutil partitionDisk "/dev/$TARGET_DISK" MBR "MS-DOS FAT32" ENTROPYLAB 0b
+```
 
-# Wait for the volume to appear (up to 30 seconds)
+**Block 4 – wait for volume and copy files**
+```zsh
 echo "Waiting for /Volumes/ENTROPYLAB ..."
 ATTEMPTS=0
 MAX_ATTEMPTS=30
@@ -467,3 +513,12 @@ fi
 - [ ] No network cable is attached (optional but recommended for the air-gapped use case)
 
 Insert the card, power on the Pi, and EntropyLab should start automatically in full-screen Chromium.
+
+### Expected boot behaviour (after this fix)
+
+1. OpenRC starts.
+2. `local` service runs → `00-install-cache.start` installs all packages from the card’s `cache/` folder.
+3. `entropylab` service starts → `httpd` serves the HTML, `cage` launches Chromium in kiosk mode.
+4. You should see EntropyLab full-screen (no login prompt).
+
+If you still land at a login prompt, the package install step failed. Power off, put the card back in the Mac, and check that `/Volumes/ENTROPYLAB/cache/` contains many `.apk` files.
