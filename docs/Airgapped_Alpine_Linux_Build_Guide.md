@@ -209,8 +209,23 @@ mkdir -p ovl_root/etc/local.d
 cat << 'EOF' > ovl_root/etc/local.d/00-install-cache.start
 #!/bin/sh
 echo "Installing packages from boot media cache..."
-if [ -d /media/*/cache ]; then
-  apk add --allow-untrusted /media/*/cache/*.apk 2>&1 | head -20
+
+# Try multiple possible mount points for the cache
+CACHE_FOUND=0
+
+# First, try common boot media mount points
+for MOUNT_POINT in /media/boot /media/ENTROPYLAB /mnt/ENTROPYLAB /boot /media/*; do
+  if [ -d "$MOUNT_POINT/cache" ] && [ -n "$(ls -A $MOUNT_POINT/cache/*.apk 2>/dev/null | head -1)" ]; then
+    echo "Found cache at: $MOUNT_POINT/cache"
+    apk add --allow-untrusted $MOUNT_POINT/cache/*.apk 2>&1 | head -20
+    CACHE_FOUND=1
+    break
+  fi
+done
+
+if [ $CACHE_FOUND -eq 0 ]; then
+  echo "WARNING: Could not find cache packages. Packages must be installed manually or via network."
+else
   echo "Cache package installation completed."
 fi
 EOF
