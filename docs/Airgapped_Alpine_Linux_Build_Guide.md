@@ -397,22 +397,44 @@ echo "✅ Overlay packaged as boot/entropylab.apkovl.tar.gz"
 
 > **Password note:** `diskutil partitionDisk` will ask for your **macOS User Administrator Password**.
 
-```zsh
-echo "⚠️  WARNING: You are about to ERASE one of these disks!"
-echo "Available disks:"
-diskutil list
+##### 7A.1 List available disks
 
+```zsh
+diskutil list
+```
+
+**What it does:** Displays all mounted disks. Look for your microSD card or USB stick and note its identifier (e.g., `disk4`).
+
+---
+
+##### 7A.2 Prompt for disk identifier
+
+After reviewing the disk list above, run this to select which disk to erase:
+
+```zsh
 read "TARGET_DISK?Enter the disk identifier to erase (example: disk4): "
 if [ -z "$TARGET_DISK" ]; then
   echo "❌ No disk selected. Aborting."
   exit 1
 fi
+```
 
+---
+
+##### 7A.3 Validate the disk exists
+
+```zsh
 if ! diskutil info "/dev/$TARGET_DISK" >/dev/null 2>&1; then
   echo "❌ Disk /dev/$TARGET_DISK not found."
   exit 1
 fi
+```
 
+---
+
+##### 7A.4 Show disk details and confirm erasure
+
+```zsh
 DISK_SIZE=$(diskutil info "/dev/$TARGET_DISK" | grep "Disk Size" | sed 's/.*: *//')
 echo ""
 echo "About to erase: /dev/$TARGET_DISK"
@@ -422,11 +444,26 @@ if [ "$CONFIRM" != "YES" ]; then
   echo "❌ Aborted."
   exit 1
 fi
+```
 
+**What it does:** Shows you the disk size and asks for final confirmation. Type **`YES`** exactly to proceed.
+
+---
+
+##### 7A.5 Erase and partition the disk
+
+```zsh
 echo "Erasing and partitioning /dev/$TARGET_DISK ..."
 diskutil partitionDisk "/dev/$TARGET_DISK" MBR "MS-DOS FAT32" ENTROPYLAB 0b
+```
 
-# Wait for the volume to appear (up to 30 seconds)
+**Note:** This will prompt for your **macOS admin password**.
+
+---
+
+##### 7A.6 Wait for the volume to mount
+
+```zsh
 echo "Waiting for /Volumes/ENTROPYLAB ..."
 ATTEMPTS=0
 MAX_ATTEMPTS=30
@@ -445,16 +482,30 @@ if [ ! -d /Volumes/ENTROPYLAB ]; then
   echo "   Check Disk Utility. Did the partition step succeed?"
   exit 1
 fi
+```
 
+---
+
+##### 7A.7 Copy files to the disk
+
+```zsh
 echo "Copying files..."
 cp -R boot/* /Volumes/ENTROPYLAB/
 mkdir -p /Volumes/ENTROPYLAB/cache
 cp -R cache/* /Volumes/ENTROPYLAB/cache/
+```
 
+---
+
+##### 7A.8 Safely eject the disk
+
+```zsh
 sync
 diskutil eject /Volumes/ENTROPYLAB
 echo "✅ Done. Card/stick is ready to boot on a Raspberry Pi 4/5."
 ```
+
+---
 
 #### Option B – Create a distributable .img file
 
