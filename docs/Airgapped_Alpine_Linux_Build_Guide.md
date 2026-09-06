@@ -82,7 +82,6 @@ All commands below assume you are already in that folder.
 > Homebrew / OrbStack may ask for your **macOS admin password**.
 
 ```zsh
-# Must be Apple Silicon
 if [ "$(uname -m)" != "arm64" ]; then
   echo "This workflow requires an Apple Silicon Mac."
   exit 1
@@ -315,7 +314,6 @@ Uses `` `tty` `` instead of `$(tty)` so a bad paste is less likely to confuse zs
 
 ```zsh
 cat > ovl_root/home/entropylab/.profile << 'EOF'
-# Wait until X is installed, then start it on tty1.
 if [ -z "$DISPLAY" ]; then
   case `tty` in
     /dev/tty1)
@@ -458,30 +456,34 @@ echo "Boot files extracted."
 
 ## 7. Lock down firmware and kernel networking
 
+Paste this whole block. (No bare `#` lines outside the heredoc — some Mac zsh setups treat those as commands.)
+
 ```zsh
 cat > boot/usercfg.txt << 'EOF'
-# EntropyLab air-gapped Pi 4/5
 dtoverlay=disable-wifi
 dtoverlay=disable-bt
-
-# DRM/KMS for Xorg + Chromium
 dtoverlay=vc4-kms-v3d
 max_framebuffers=2
 disable_fw_kms_setup=1
-
 hdmi_force_hotplug=1
 EOF
 
-# Do not let the kernel bring up an IP stack
 if ! grep -q 'ip=off' boot/cmdline.txt; then
   gsed -i 's/$/ ip=off/' boot/cmdline.txt
 fi
 
-# HDMI console
 if ! grep -q 'console=tty1' boot/cmdline.txt; then
   gsed -i 's/$/ console=tty1/' boot/cmdline.txt
 fi
+
+echo "--- usercfg.txt ---"
+cat boot/usercfg.txt
+echo "--- cmdline.txt ---"
+cat boot/cmdline.txt
+echo "Step 7 OK"
 ```
+
+You should see `disable-wifi`, `disable-bt`, `vc4-kms-v3d` in usercfg, and `ip=off` plus `console=tty1` in cmdline.
 
 ---
 
@@ -497,7 +499,7 @@ then eject the card and boot the Pi.
 On the Pi it is copied into RAM as:
   file:///tmp/html/entropylab.html
 
-Right-click the desktop → Open EntropyLab HTML
+Right-click the desktop and choose Open EntropyLab HTML
 EOF
 
 echo "Overlay packaged: boot/entropylab.apkovl.tar.gz"
@@ -507,7 +509,7 @@ echo "Overlay packaged: boot/entropylab.apkovl.tar.gz"
 
 ## 9. Copy onto an SD card (erases the card)
 
-> `diskutil` will ask for your **macOS admin password**.
+`diskutil` will ask for your **macOS admin password**.
 
 ### 9.1 List disks
 
@@ -581,8 +583,6 @@ With the card still mounted:
 
 ```zsh
 cp /path/to/entropylab.html /Volumes/ENTROPYLAB/html/entropylab.html
-# optional extra files:
-# cp other-assets... /Volumes/ENTROPYLAB/html/
 
 sync
 diskutil eject /Volumes/ENTROPYLAB
