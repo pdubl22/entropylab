@@ -184,9 +184,26 @@ You should see a large number of `.apk` files (Chromium pulls in a lot of depend
 
 This overlay is applied on every boot. It does **not** contain `entropylab.html`.
 
+**Important:** Paste **one block at a time**. Wait for `Block X OK` (or `Overlay tree ready.`) before the next block. A single giant paste is what caused the earlier `zsh: parse error near ')'`.
+
+If you already tried step 5 and it failed, start clean:
+
 ```zsh
-# --- hostname, no networking ---
-mkdir -p ovl_root/etc/network ovl_root/etc/runlevels/sysinit ovl_root/etc/runlevels/default
+rm -rf ovl_root
+mkdir -p ovl_root
+```
+
+### Block A — folders + no-network
+
+```zsh
+mkdir -p ovl_root/etc/network \
+         ovl_root/etc/runlevels/sysinit \
+         ovl_root/etc/runlevels/default \
+         ovl_root/etc/local.d \
+         ovl_root/etc/X11/xorg.conf.d \
+         ovl_root/etc/chromium \
+         ovl_root/home/entropylab/.config/openbox \
+         ovl_root/usr/local/bin
 
 echo "entropylab" > ovl_root/etc/hostname
 
@@ -195,15 +212,17 @@ auto lo
 iface lo inet loopback
 EOF
 
-# --- OpenRC: udev + dbus + local.d; no networking ---
 ln -sf /etc/init.d/udev         ovl_root/etc/runlevels/sysinit/udev
 ln -sf /etc/init.d/udev-trigger ovl_root/etc/runlevels/sysinit/udev-trigger
 ln -sf /etc/init.d/dbus         ovl_root/etc/runlevels/default/dbus
 ln -sf /etc/init.d/local        ovl_root/etc/runlevels/default/local
 
-# --- install cache packages into RAM, then copy HTML, then remount boot read-only ---
-mkdir -p ovl_root/etc/local.d
+echo "Block A OK"
+```
 
+### Block B — boot scripts
+
+```zsh
 cat > ovl_root/etc/local.d/00-install-cache.start << 'EOF'
 #!/bin/sh
 echo "Installing packages from boot media cache into RAM..."
@@ -221,6 +240,29 @@ if [ "$CACHE_FOUND" -eq 0 ]; then
 fi
 EOF
 chmod +x ovl_root/etc/local.d/00-install-cache.start
+
+cat > ovl_root/usr/local/bin/entropylab-firstboot.sh << 'EOF'
+#!/bin/sh
+addgroup -S video 2>/dev/null || true
+addgroup -S input 2>/dev/null || true
+addgroup -S audio 2>/dev/null || true
+if ! id entropylab >/dev/null 2>&1; then
+  adduser -D -s /bin/ash entropylab
+  echo "entropylab:entropylab" | chpasswd
+  addgroup entropylab video 2>/dev/null || true
+  addgroup entropylab input 2>/dev/null || true
+  addgroup entropylab audio 2>/dev/null || true
+fi
+chown -R entropylab:entropylab /home/entropylab 2>/dev/null || true
+exit 0
+EOF
+chmod +x ovl_root/usr/local/bin/entropylab-firstboot.sh
+
+cat > ovl_root/etc/local.d/05-user.start << 'EOF'
+#!/bin/sh
+/usr/local/bin/entropylab-firstboot.sh
+EOF
+chmod +x ovl_root/etc/local.d/05-user.start
 
 cat > ovl_root/etc/local.d/10-html-copy.start << 'EOF'
 #!/bin/sh
@@ -245,8 +287,12 @@ exit 0
 EOF
 chmod +x ovl_root/etc/local.d/10-html-copy.start
 
-# --- Xorg for Pi 4/5 (vc4 KMS) ---
-mkdir -p ovl_root/etc/X11/xorg.conf.d
+echo "Block B OK"
+```
+
+### Block C — Xorg + Chromium
+
+```zsh
 cat > ovl_root/etc/X11/xorg.conf.d/99-vc4.conf << 'EOF'
 Section "OutputClass"
     Identifier "vc4"
@@ -256,52 +302,32 @@ Section "OutputClass"
 EndSection
 EOF
 
-# --- Chromium flags ---
-# musl/Alpine often needs --no-sandbox. This machine is air-gapped and physically trusted.
-mkdir -p ovl_root/etc/chromium
 cat > ovl_root/etc/chromium/chromium.conf << 'EOF'
 CHROMIUM_FLAGS="--no-sandbox --disable-gpu-sandbox --user-data-dir=/tmp/chromium-data --no-first-run --no-default-browser-check --disable-sync --disable-background-networking --disable-features=TranslateUI"
 EOF
 
-# --- user home / session (user is created at first boot if missing) ---
-mkdir -p ovl_root/home/entropylab/.config/openbox
-mkdir -p ovl_root/usr/local/bin
+echo "Block C OK"
+```
 
-cat > ovl_root/usr/local/bin/entropylab-firstboot.sh << 'EOF'
-#!/bin/sh
-# Create the desktop user once packages exist. Safe to run every boot.
-addgroup -S video 2>/dev/null || true
-addgroup -S input 2>/dev/null || true
-addgroup -S audio 2>/dev/null || true
-if ! id entropylab >/dev/null 2>&1; then
-  adduser -D -s /bin/ash entropylab
-  echo "entropylab:entropylab" | chpasswd
-  addgroup entropylab video 2>/dev/null || true
-  addgroup entropylab input 2>/dev/null || true
-  addgroup entropylab audio 2>/dev/null || true
-fi
-chown -R entropylab:entropylab /home/entropylab 2>/dev/null || true
-exit 0
-EOF
-chmod +x ovl_root/usr/local/bin/entropylab-firstboot.sh
+### Block D — user session
 
-# run user creation after cache install
-cat > ovl_root/etc/local.d/05-user.start << 'EOF'
-#!/bin/sh
-/usr/local/bin/entropylab-firstboot.sh
-EOF
-chmod +x ovl_root/etc/local.d/05-user.start
+Uses `` `tty` `` instead of `$(tty)` so a bad paste is less likely to confuse zsh.
 
+```zsh
 cat > ovl_root/home/entropylab/.profile << 'EOF'
-# Wait until X is actually installed (cache unpack), then start it on tty1.
-if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
-  i=0
-  while [ "$i" -lt 120 ]; do
-    command -v startx >/dev/null 2>&1 && break
-    sleep 2
-    i=$((i + 1))
-  done
-  exec startx
+# Wait until X is installed, then start it on tty1.
+if [ -z "$DISPLAY" ]; then
+  case `tty` in
+    /dev/tty1)
+      i=0
+      while [ "$i" -lt 120 ]; do
+        command -v startx >/dev/null 2>&1 && break
+        sleep 2
+        i=`expr "$i" + 1`
+      done
+      exec startx
+      ;;
+  esac
 fi
 EOF
 
@@ -318,6 +344,12 @@ exec openbox-session
 EOF
 chmod +x ovl_root/home/entropylab/.xinitrc
 
+echo "Block D OK"
+```
+
+### Block E — Openbox menu / config
+
+```zsh
 cat > ovl_root/home/entropylab/.config/openbox/menu.xml << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <openbox_menu>
@@ -354,7 +386,12 @@ cat > ovl_root/home/entropylab/.config/openbox/rc.xml << 'EOF'
 </openbox_config>
 EOF
 
-# --- autologin on tty1 (agetty is in cache; inittab is applied from overlay) ---
+echo "Block E OK"
+```
+
+### Block F — autologin
+
+```zsh
 cat > ovl_root/etc/inittab << 'EOF'
 ::sysinit:/sbin/openrc sysinit
 ::sysinit:/sbin/openrc boot
@@ -370,6 +407,28 @@ EOF
 
 echo "Overlay tree ready."
 ```
+
+### Verify overlay before continuing
+
+```zsh
+for f in \
+  ovl_root/etc/hostname \
+  ovl_root/etc/network/interfaces \
+  ovl_root/etc/inittab \
+  ovl_root/etc/local.d/00-install-cache.start \
+  ovl_root/etc/local.d/05-user.start \
+  ovl_root/etc/local.d/10-html-copy.start \
+  ovl_root/etc/chromium/chromium.conf \
+  ovl_root/home/entropylab/.profile \
+  ovl_root/home/entropylab/.xinitrc \
+  ovl_root/home/entropylab/.config/openbox/menu.xml \
+  ovl_root/home/entropylab/.config/openbox/rc.xml
+do
+  if [ -e "$f" ]; then echo "OK  $f"; else echo "MISSING  $f"; fi
+done
+```
+
+Every line should say `OK`. If any say `MISSING`, re-run that block only.
 
 ---
 
